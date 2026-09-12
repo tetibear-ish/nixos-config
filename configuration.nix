@@ -113,6 +113,7 @@
     tldr
     prismlauncher
     mosh
+    jre8
   #  wget
   ];
 
