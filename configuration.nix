@@ -112,7 +112,7 @@
     blender
     tldr
     prismlauncher
-    tmux
+    mosh
   #  wget
   ];
 
@@ -146,7 +146,7 @@
 
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
-  # networking.firewall.allowedUDPPorts = [ ... ];
+  networking.firewall.allowedUDPPortRanges = [ { from = 60000; to = 61000; } ];
   # Or disable the firewall altogether.
   # networking.firewall.enable = false;
 
