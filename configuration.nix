@@ -111,6 +111,7 @@
     steam
     blender
     tldr
+    prismlauncher
   #  wget
   ];
 
