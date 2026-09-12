@@ -118,6 +118,7 @@
     ohMyZsh = {
       enable = true;
       theme = "kawaii";
+      plugins = [ "git" "z" ];
       custom = toString (pkgs.runCommand "oh-my-zsh-custom" {} ''
         mkdir -p $out/themes
         cp ${./kawaii.zsh-theme} $out/themes/kawaii.zsh-theme
