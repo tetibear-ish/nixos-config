@@ -145,6 +145,20 @@
   services.tailscale.enable = true;
   networking.firewall.trustedInterfaces = [ "tailscale0" ];
 
+  # Never sleep or hibernate; only the monitor should turn off
+  services.logind.extraConfig = ''
+    IdleAction=ignore
+    HandleSuspendKey=ignore
+    HandleHibernateKey=ignore
+    HandleLidSwitch=ignore
+  '';
+  systemd.sleep.extraConfig = ''
+    AllowSuspend=no
+    AllowHibernation=no
+    AllowSuspendThenHibernate=no
+    AllowHybridSleep=no
+  '';
+
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
   networking.firewall.allowedUDPPortRanges = [ { from = 60000; to = 61000; } ];
