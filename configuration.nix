@@ -110,6 +110,7 @@
     fastfetch
     steam
     blender
+    tldr
   #  wget
   ];
 
