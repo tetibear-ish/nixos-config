@@ -139,6 +139,9 @@
   # Enable the OpenSSH daemon.
   # services.openssh.enable = true;
 
+  services.tailscale.enable = true;
+  networking.firewall.trustedInterfaces = [ "tailscale0" ];
+
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
   # networking.firewall.allowedUDPPorts = [ ... ];
