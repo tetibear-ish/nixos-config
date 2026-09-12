@@ -6,8 +6,8 @@
 
 {
   imports =
-    [ # Include the results of the hardware scan.
-      ./hardware-configuration.nix
+    [ ./hardware-configuration.nix
+      ./vfio.nix
     ];
   # KDE Plasma 6
   services.displayManager.sddm.enable = true;

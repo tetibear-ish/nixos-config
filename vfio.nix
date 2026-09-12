@@ -53,7 +53,7 @@
   programs.virt-manager.enable = true;
   programs.dconf.enable = true;  # virt-manager needs this for its settings
 
-  users.users.zz.extraGroups = [ "libvirtd" "kvm" ];
+  users.users.tetibear.extraGroups = [ "libvirtd" "kvm" ];
 
   # --- Notes / next steps -------------------------------------------------
   # 1. After the first boot with this applied, confirm the 1050 Ti actually
