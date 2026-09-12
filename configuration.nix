@@ -112,6 +112,7 @@
     blender
     tldr
     prismlauncher
+    tmux
   #  wget
   ];
 
