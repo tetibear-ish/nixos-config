@@ -115,6 +115,7 @@
     mosh
     jre8
     (python3.withPackages (ps: with ps; [ pip ]))
+    easyeffects
   #  wget
   ];
 
@@ -154,6 +155,7 @@
     HandleLidSwitch = "ignore";
   };
   systemd.sleep.settings.Sleep = {
+    AllowSuspend = false;
     AllowHibernation = false;
     AllowSuspendThenHibernate = false;
     AllowHybridSleep = false;
