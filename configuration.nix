@@ -114,6 +114,7 @@
     prismlauncher
     mosh
     jre8
+    python3
   #  wget
   ];
 
