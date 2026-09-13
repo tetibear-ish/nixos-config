@@ -154,7 +154,6 @@
     HandleLidSwitch = "ignore";
   };
   systemd.sleep.settings.Sleep = {
-    AllowSuspend = false;
     AllowHibernation = false;
     AllowSuspendThenHibernate = false;
     AllowHybridSleep = false;
