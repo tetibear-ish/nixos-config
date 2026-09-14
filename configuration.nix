@@ -93,9 +93,6 @@
 
   # Install firefox.
   programs.firefox.enable = true;
-
-  xdg.portal.enable = true;
-  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-kde ];
   programs.nix-ld.enable = true;
 
   # Allow unfree packages
