@@ -6,8 +6,7 @@
 
 {
   imports =
-    [ ./hardware-configuration.nix
-      # ./vfio.nix
+    [ # ./vfio.nix
     ];
   # KDE Plasma 6
   services.displayManager.sddm.enable = true;
@@ -16,7 +15,6 @@
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
 
-  networking.hostName = "nixos"; # Define your hostname.
   # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
 
   # Configure network proxy if necessary
@@ -134,6 +132,14 @@
     };
   };
 
+  programs.git = {
+    enable = true;
+    config = {
+      user.name = "tetibear-ish";
+      user.email = "tetibear@a2z-technologies.com";
+    };
+  };
+
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
   # programs.mtr.enable = true;
@@ -147,6 +153,23 @@
   services.openssh.enable = true;
 
   services.tailscale.enable = true;
+
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+  systemd.services.nixos-upgrade-on-boot = {
+    description = "Upgrade NixOS config from GitHub on boot";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      TimeoutStartSec = 300;
+    };
+    path = with pkgs; [ nixos-rebuild nix git ];
+    script = ''
+      nixos-rebuild switch --flake github:tetibear-ish/nixos-config
+    '';
+  };
   networking.firewall.trustedInterfaces = [ "tailscale0" ];
 
   # Never sleep or hibernate; only the monitor should turn off
