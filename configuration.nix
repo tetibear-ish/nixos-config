@@ -114,8 +114,8 @@
     mosh
     jre8
     (python3.withPackages (ps: with ps; [ pip ]))
-    easyeffects
     vscode
+    codex
   #  wget
   ];
 
@@ -149,6 +149,12 @@
   # };
 
   # List services that you want to enable:
+
+  services.vikunja = {
+    enable = true;
+    frontendScheme = "http";
+    frontendHostname = "hoshimi.taila2fcf3.ts.net";
+  };
 
   services.openssh.enable = true;
 
