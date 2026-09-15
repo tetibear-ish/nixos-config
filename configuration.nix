@@ -173,7 +173,7 @@
     };
     path = with pkgs; [ nixos-rebuild nix git ];
     script = ''
-      nixos-rebuild switch --flake github:tetibear-ish/nixos-config
+      nixos-rebuild switch --flake github:tetibear-ish/nixos-config --no-write-lock-file
     '';
   };
   networking.firewall.trustedInterfaces = [ "tailscale0" ];

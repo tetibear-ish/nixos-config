@@ -1,26 +1,47 @@
 # nixos-config
 
-NixOS configuration for a machine that isn't installed yet — currently
-running Bazzite, planning to distro-hop to NixOS to experiment with
-GPU passthrough (VFIO).
+NixOS flake configuration for two machines: **hoshimi** and **nixos**.
+
+Once set up, each machine automatically pulls the latest config from GitHub and runs `nixos-rebuild switch` on every boot. See **First-time setup** below to onboard a new machine.
+
+## Machines
+
+| Host | Hardware |
+|------|----------|
+| `hoshimi` | AMD Ryzen 9 7950X3D, RX 6800 XT |
+| `nixos` | AMD (see `hardware-nixos.nix`) |
 
 ## Files
 
-- `vfio.nix` — draft VFIO/GPU-passthrough section (IOMMU, vfio-pci binding,
-  libvirtd/QEMU/OVMF) to merge into the real `configuration.nix` once
-  NixOS is actually installed. See the comments in the file for hardware
-  details, verification steps, and follow-up tuning (IOMMU group check,
-  CPU pinning for the 7950X3D's asymmetric CCDs, hugepages).
+- `flake.nix` — defines both machine configurations
+- `configuration.nix` — shared config for all machines
+- `hardware-hoshimi.nix` — hoshimi hardware (tracked, not secret)
+- `hardware-nixos.nix` — nixos hardware (tracked, not secret)
+- `vfio.nix` — draft VFIO/GPU-passthrough config (commented out in imports)
+- `kawaii.zsh-theme` — oh-my-zsh theme
 
-## Hardware target
+## Workflow
 
-- CPU: AMD Ryzen 9 7950X3D
-- Host GPU: AMD RX 6800 XT (or the Raphael iGPU)
-- Passthrough GPU: Nvidia GTX 1050 Ti (`10de:1c82` / `10de:0fb9`)
+**Making a change:**
+1. Edit `configuration.nix` (or any other file) on either machine
+2. `git commit` and `git push`
+3. The change will apply automatically on next boot of all machines
 
-## Status
+**Applying immediately without rebooting:**
+```bash
+sudo nixos-rebuild switch --flake ~/nixos-config#hoshimi   # on hoshimi
+sudo nixos-rebuild switch --flake ~/nixos-config#nixos     # on nixos
+```
 
-Pre-install planning. Once NixOS is actually installed, this repo should
-hold the real `configuration.nix` (and `hardware-configuration.nix`,
-kept out of git if it's machine-specific enough to not matter, or kept
-in if you want a record of it).
+**Updating nixpkgs (to get package updates):**
+```bash
+nix flake update ~/nixos-config
+git add flake.lock && git commit -m "update nixpkgs" && git push
+```
+Then rebuild or reboot to apply.
+
+**First-time setup on a new machine:**
+1. Add its hardware config to the repo: `nixos-generate-config --show-hardware-config > hardware-<hostname>.nix`
+2. Add a `nixosConfigurations.<hostname>` entry in `flake.nix`
+3. Commit and push
+4. On the machine: `sudo nixos-rebuild switch --flake github:tetibear-ish/nixos-config#<hostname> --no-write-lock-file`

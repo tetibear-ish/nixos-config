@@ -9,6 +9,7 @@
       modules = [
         ./configuration.nix
         ./hardware-hoshimi.nix
+        ./minecraft.nix
         { networking.hostName = "hoshimi"; }
       ];
     };
