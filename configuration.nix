@@ -169,6 +169,7 @@
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
       Type = "oneshot";
+      RemainAfterExit = true;
       TimeoutStartSec = 300;
     };
     path = with pkgs; [ nixos-rebuild nix git ];
