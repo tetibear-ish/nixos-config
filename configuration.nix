@@ -8,9 +8,11 @@
   imports =
     [ # ./vfio.nix
     ];
-  # KDE Plasma 6
-  services.displayManager.sddm.enable = true;
-  services.desktopManager.plasma6.enable = true;
+  services.displayManager.sddm = {
+    enable = true;
+    wayland.enable = true;
+  };
+  programs.hyprland.enable = true;
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
@@ -116,6 +118,12 @@
     (python3.withPackages (ps: with ps; [ pip ]))
     vscode
     codex
+    obs-studio
+    kitty
+    waybar
+    wofi
+    hyprpaper
+    hyprlock
   #  wget
   ];
 
