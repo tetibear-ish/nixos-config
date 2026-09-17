@@ -135,13 +135,6 @@
   #  wget
   ];
 
-  programs.tmux = {
-    enable = true;
-    extraConfig = ''
-      source "${pkgs.python3Packages.powerline}/share/tmux/powerline.conf"
-    '';
-  };
-
   programs.zsh = {
     enable = true;
     ohMyZsh = {
