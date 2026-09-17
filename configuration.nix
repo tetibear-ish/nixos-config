@@ -156,6 +156,13 @@
     };
   };
 
+  system.activationScripts.tpm.text = ''
+    if [ ! -d /home/tetibear/.tmux/plugins/tpm ]; then
+      ${pkgs.git}/bin/git clone https://github.com/tmux-plugins/tpm /home/tetibear/.tmux/plugins/tpm
+      chown -R tetibear:users /home/tetibear/.tmux/plugins/tpm
+    fi
+  '';
+
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
   # programs.mtr.enable = true;
