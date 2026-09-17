@@ -26,6 +26,11 @@
   # Enable networking
   networking.networkmanager.enable = true;
 
+  fonts.packages = with pkgs; [
+    nerd-fonts.hack
+    powerline-fonts
+  ];
+
   # Set your time zone.
   time.timeZone = "America/New_York";
 
@@ -124,6 +129,9 @@
     wofi
     hyprpaper
     hyprlock
+    tmux
+    rclone
+    powerline
   #  wget
   ];
 
@@ -186,6 +194,36 @@
     '';
   };
   networking.firewall.trustedInterfaces = [ "tailscale0" ];
+
+  # Two-way sync between the "IT Wizards" Google Drive folder and the
+  # local project's docs/ directory.
+  systemd.services."itwizards-drive-bisync" = {
+    description = "Bisync IT Wizards Google Drive folder with local docs/";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      User = "tetibear";
+      Environment = "HOME=/home/tetibear";
+      WorkingDirectory = "/home/tetibear/Projects/IT Wizards";
+    };
+    path = [ pkgs.rclone ];
+    script = ''
+      rclone bisync "gdrive:IT Wizards" "/home/tetibear/Projects/IT Wizards/docs" \
+        --conflict-resolve newer \
+        -v
+    '';
+  };
+
+  systemd.timers."itwizards-drive-bisync" = {
+    description = "Run itwizards-drive-bisync every 5 minutes";
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "2m";
+      OnUnitActiveSec = "5m";
+      Unit = "itwizards-drive-bisync.service";
+    };
+  };
 
   # Never sleep or hibernate; only the monitor should turn off
   services.logind.settings.Login = {
