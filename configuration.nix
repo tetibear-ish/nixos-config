@@ -29,6 +29,7 @@
   fonts.packages = with pkgs; [
     nerd-fonts.hack
     powerline-fonts
+    powerline
   ];
 
   # Set your time zone.
