@@ -157,6 +157,8 @@
 
   system.activationScripts.tpm.text = ''
     if [ ! -d /home/tetibear/.tmux/plugins/tpm ]; then
+      mkdir -p /home/tetibear/.tmux/plugins
+      chown tetibear:users /home/tetibear/.tmux /home/tetibear/.tmux/plugins
       ${pkgs.git}/bin/git clone https://github.com/tmux-plugins/tpm /home/tetibear/.tmux/plugins/tpm
       chown -R tetibear:users /home/tetibear/.tmux/plugins/tpm
     fi
