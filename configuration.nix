@@ -197,6 +197,10 @@
     };
     path = with pkgs; [ nixos-rebuild nix git ];
     script = ''
+      if systemctl cat nixos-rebuild-switch-to-configuration.service >/dev/null 2>&1; then
+        echo "Another nixos-rebuild is already in progress, skipping."
+        exit 0
+      fi
       nixos-rebuild switch --flake github:tetibear-ish/nixos-config --no-write-lock-file
     '';
   };
