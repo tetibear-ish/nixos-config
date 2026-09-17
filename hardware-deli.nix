@@ -30,4 +30,8 @@
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
   hardware.cpu.intel.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
+
+  # Natural (macOS-style) scrolling for the trackpad on this host.
+  services.libinput.enable = true;
+  services.libinput.touchpad.naturalScrolling = true;
 }

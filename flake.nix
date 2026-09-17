@@ -22,5 +22,14 @@
         { networking.hostName = "nixos"; }
       ];
     };
+
+    nixosConfigurations.deli = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        ./hardware-deli.nix
+        { networking.hostName = "deli"; }
+      ];
+    };
   };
 }
