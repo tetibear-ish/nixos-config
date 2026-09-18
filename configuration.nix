@@ -163,6 +163,9 @@
       ${pkgs.git}/bin/git clone https://github.com/tmux-plugins/tpm /home/tetibear/.tmux/plugins/tpm
     fi
     chown -R tetibear:users /home/tetibear/.tmux
+    if [ -d /home/tetibear/.tmux/plugins/tmux-powerline/themes ] && [ -f /home/tetibear/.config/tmux-powerline/themes/kawaii.sh ]; then
+      ln -sf /home/tetibear/.config/tmux-powerline/themes/kawaii.sh /home/tetibear/.tmux/plugins/tmux-powerline/themes/kawaii.sh
+    fi
   '';
 
   # Some programs need SUID wrappers, can be configured further or are
