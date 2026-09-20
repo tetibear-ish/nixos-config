@@ -162,6 +162,9 @@
     hyprpaper
     hyprlock
     tmux
+    neovim
+    ripgrep
+    fd
   #  wget
     obs-studio
   ];
