@@ -116,6 +116,14 @@
   # Enable touchpad support (enabled default in most desktopManager).
   # services.xserver.libinput.enable = true;
 
+  # 32-bit graphics is required for Steam's client UI (a 32-bit binary) and
+  # many games/Proton -- without it, Steam crashes on startup with
+  # "glXChooseVisual failed" before any window appears.
+  hardware.graphics = {
+    enable = true;
+    enable32Bit = true;
+  };
+
   # Define a user account. Don't forget to set a password with ‘passwd’.
   users.users."tetibear" = {
     isNormalUser = true;
@@ -130,6 +138,12 @@
   # Install firefox.
   programs.firefox.enable = true;
   programs.nix-ld.enable = true;
+
+  programs.steam = {
+    enable = true;
+    remotePlay.openFirewall = true;
+    localNetworkGameTransfers.openFirewall = true;
+  };
 
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
@@ -146,7 +160,6 @@
     discord
     spotify
     fastfetch
-    steam
     blender
     tldr
     prismlauncher
