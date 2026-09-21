@@ -137,7 +137,7 @@
   # List packages installed in system profile. To search, run:
   # $ nix search wget
   environment.systemPackages = with pkgs; [
-    vim # Do not forget to add an editor to edit configuration.nix! The Nano editor is also installed by default.
+    vim
     sweet
     google-chrome
     claude-code
@@ -146,7 +146,6 @@
     discord
     spotify
     fastfetch
-    steam
     blender
     tldr
     prismlauncher
@@ -165,9 +164,25 @@
     neovim
     ripgrep
     fd
-  #  wget
-    obs-studio
   ];
+
+  programs.steam = {
+    enable = true;
+    remotePlay.openFirewall = true;
+  };
+
+  hardware.graphics = {
+    enable = true;
+    enable32Bit = true;
+    extraPackages = with pkgs; [
+      vulkan-loader
+      vulkan-validation-layers
+      amdvlk
+    ];
+    extraPackages32 = with pkgs; [
+      driversi686Linux.amdvlk
+    ];
+  };
 
   programs.zsh = {
     enable = true;
