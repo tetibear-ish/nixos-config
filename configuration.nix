@@ -156,6 +156,7 @@
     codex
     obs-studio
     kitty
+    unityhub
     waybar
     wofi
     hyprpaper
