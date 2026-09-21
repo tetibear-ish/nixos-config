@@ -1,19 +1,7 @@
-# Edit this configuration file to define what should be installed on
-# your system.  Help is available in the configuration.nix(5) man page
-# and in the NixOS manual (accessible by running ‘nixos-help’).
-
+# Shared base config, imported by desktop.nix and server.nix.
 { config, pkgs, ... }:
 
 {
-  imports =
-    [ # ./vfio.nix
-    ];
-  services.displayManager.sddm = {
-    enable = true;
-    wayland.enable = true;
-  };
-  services.desktopManager.plasma6.enable = true;
-  programs.hyprland.enable = true;
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
@@ -26,12 +14,6 @@
 
   # Enable networking
   networking.networkmanager.enable = true;
-
-  fonts.packages = with pkgs; [
-    nerd-fonts.hack
-    powerline-fonts
-    powerline
-  ];
 
   # Set your time zone.
   time.timeZone = "America/New_York";
@@ -51,71 +33,6 @@
     LC_TIME = "en_US.UTF-8";
   };
 
-  # Enable the X11 windowing system.
-  services.xserver.enable = true;
-
-  # Enable the Budgie Desktop environment.
-  #services.xserver.displayManager.lightdm.enable = true;
-  #services.desktopManager.budgie.enable = true;
-
-  # Configure keymap in X11
-  services.xserver.xkb = {
-    layout = "us";
-    variant = "";
-    options = "ctrl:nocaps";
-  };
-
-  # Enable CUPS to print documents.
-  services.printing.enable = true;
-
-  # Enable sound with pipewire.
-  services.pulseaudio.enable = false;
-  security.rtkit.enable = true;
-  services.pipewire = {
-    enable = true;
-    alsa.enable = true;
-    alsa.support32Bit = true;
-    pulse.enable = true;
-
-    # RNNoise filter chain: creates a virtual "Noise-Cancelled Mic" source
-    # Select it as your microphone in Discord (or any app) via Settings → Voice
-    extraConfig.pipewire."99-rnnoise" = {
-      "context.modules" = [
-        {
-          name = "libpipewire-module-filter-chain";
-          args = {
-            "node.description" = "Noise-Cancelled Mic";
-            "media.name" = "Noise-Cancelled Mic";
-            "filter.graph" = {
-              nodes = [
-                {
-                  type = "ladspa";
-                  name = "rnnoise";
-                  plugin = "${pkgs.rnnoise-plugin}/lib/ladspa/librnnoise_ladspa.so";
-                  label = "noise_suppressor_mono";
-                  control = { "VAD Threshold (%)" = 50; };
-                }
-              ];
-            };
-            "capture.props" = {
-              "node.name" = "capture.rnnoise_source";
-              "node.passive" = true;
-              "audio.rate" = 48000;
-            };
-            "playback.props" = {
-              "node.name" = "rnnoise_source";
-              "media.class" = "Audio/Source";
-              "audio.rate" = 48000;
-            };
-          };
-        }
-      ];
-    };
-  };
-
-  # Enable touchpad support (enabled default in most desktopManager).
-  # services.xserver.libinput.enable = true;
-
   # Define a user account. Don't forget to set a password with ‘passwd’.
   users.users."tetibear" = {
     isNormalUser = true;
@@ -127,8 +44,6 @@
     ];
   };
 
-  # Install firefox.
-  programs.firefox.enable = true;
   programs.nix-ld.enable = true;
 
   # Allow unfree packages
@@ -137,45 +52,18 @@
   # List packages installed in system profile. To search, run:
   # $ nix search wget
   environment.systemPackages = with pkgs; [
-    vim
-    sweet
-    google-chrome
+    vim # Do not forget to add an editor to edit configuration.nix! The Nano editor is also installed by default.
     claude-code
-    wl-clipboard
     git
-    discord
-    spotify
     fastfetch
-    blender
     tldr
-    prismlauncher
     mosh
-    jre8
-    (python3.withPackages (ps: with ps; [ pip ]))
-    vscode
-    codex
-    obs-studio
-    kitty
-    unityhub
-    waybar
-    wofi
-    hyprpaper
-    hyprlock
     tmux
     neovim
     ripgrep
     fd
+  #  wget
   ];
-
-  programs.steam = {
-    enable = true;
-    remotePlay.openFirewall = true;
-  };
-
-  hardware.graphics = {
-    enable = true;
-    enable32Bit = true;
-  };
 
   programs.zsh = {
     enable = true;
@@ -217,14 +105,6 @@
   #   enableSSHSupport = true;
   # };
 
-  # List services that you want to enable:
-
-  services.vikunja = {
-    enable = true;
-    frontendScheme = "http";
-    frontendHostname = "hoshimi.taila2fcf3.ts.net";
-  };
-
   services.openssh.enable = true;
 
   services.tailscale.enable = true;
@@ -253,7 +133,6 @@
   };
   networking.firewall.trustedInterfaces = [ "tailscale0" ];
 
-
   # Never sleep or hibernate; only the monitor should turn off
   services.logind.settings.Login = {
     IdleAction = "ignore";
@@ -281,5 +160,4 @@
   # Before changing this value read the documentation for this option
   # (e.g. man configuration.nix or on https://nixos.org/nixos/options.html).
   system.stateVersion = "26.05"; # Did you read the comment?
-
 }
