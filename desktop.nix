@@ -101,12 +101,10 @@
     hyprlock
   ];
 
-  programs.obs-studio = {
-    enable = true;
-    plugins = with pkgs.obs-studio-plugins; [
-      obs-pipewire-audio-capture
-    ];
-  };
+  # OBS via Flatpak gets the proper com.obsproject.Studio app ID
+  # which is required for xdg-desktop-portal ScreenCast to work on Wayland.
+  # After rebuild: flatpak install flathub com.obsproject.Studio
+  services.flatpak.enable = true;
 
   xdg.portal = {
     enable = true;
