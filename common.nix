@@ -1,6 +1,18 @@
 # Shared base config, imported by desktop.nix and server.nix.
 { config, pkgs, ... }:
 
+let
+  flash = pkgs.writeShellApplication {
+    name = "flash";
+    runtimeInputs = with pkgs; [ util-linux coreutils ];
+    text = builtins.readFile ./flash.sh;
+  };
+  test-iso = pkgs.writeShellApplication {
+    name = "test-iso";
+    runtimeInputs = with pkgs; [ qemu nix coreutils findutils ];
+    text = builtins.readFile ./test-iso.sh;
+  };
+in
 {
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
@@ -58,6 +70,8 @@
     neovim
     ripgrep
     fd
+    flash
+    test-iso
   #  wget
   ];
 
