@@ -10,9 +10,9 @@
       lib = nixpkgs.lib;
 
       hosts = {
-        hoshimi = { profile = ./desktop.nix; extraModules = [ ./hoshimi.nix ./minecraft.nix ]; };
-        nixos   = { profile = ./desktop.nix; extraModules = [ ]; };
-        deli    = { profile = ./desktop.nix; extraModules = [ ]; };
+        hoshimi = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./hoshimi.nix ./minecraft.nix ]; };
+        nixos   = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./kraken.nix ]; };
+        deli    = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ]; };
         # INSTALLER: new hosts appended below this line
       };
     in
@@ -27,5 +27,11 @@
           ] ++ h.extraModules;
         })
         hosts;
+
+      packages.x86_64-linux.installer-iso = nixos-generators.nixosGenerate {
+        system = "x86_64-linux";
+        format = "install-iso";
+        modules = [ ./installer/iso-configuration.nix ];
+      };
     };
 }

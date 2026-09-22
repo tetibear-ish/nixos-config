@@ -1,4 +1,5 @@
-# Desktop profile: KDE Plasma6 / Hyprland, GUI apps, Steam, audio.
+# Desktop profile: KDE Plasma6 / Hyprland, free GUI apps, audio.
+# Unfree apps (Steam, Discord, Chrome, etc.) live in unfree.nix instead.
 { config, pkgs, ... }:
 
 {
@@ -87,28 +88,30 @@
 
   environment.systemPackages = with pkgs; [
     sweet
-    google-chrome
     wl-clipboard
-    discord
-    spotify
     blender
     prismlauncher
     jre8
     (python3.withPackages (ps: with ps; [ pip ]))
-    vscode
     codex
-    obs-studio
     kitty
-    unityhub
     waybar
     wofi
     hyprpaper
     hyprlock
   ];
 
-  programs.steam = {
+  programs.obs-studio = {
     enable = true;
-    remotePlay.openFirewall = true;
+    plugins = with pkgs.obs-studio-plugins; [
+      obs-pipewire-audio-capture
+    ];
+  };
+
+  xdg.portal = {
+    enable = true;
+    extraPortals = [ pkgs.kdePackages.xdg-desktop-portal-kde ];
+    config.common.default = "kde";
   };
 
   hardware.graphics = {
