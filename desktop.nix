@@ -94,6 +94,7 @@
     jre8
     (python3.withPackages (ps: with ps; [ pip ]))
     codex
+    renpy
     kitty
     waybar
     wofi
