@@ -14,6 +14,8 @@ let
   };
 in
 {
+  imports = [ ./neovim.nix ];
+
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
@@ -67,9 +69,6 @@ in
     tldr
     mosh
     tmux
-    neovim
-    ripgrep
-    fd
     flash
     test-iso
   #  wget
