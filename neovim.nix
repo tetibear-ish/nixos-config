@@ -169,7 +169,7 @@ in
                 actions.close(prompt_bufnr)
                 if entry then
                   vim.cmd('cd ' .. entry[1])
-                  require('telescope.builtin').find_files { cwd = entry[1] }
+                  require('nvim-tree.api').tree.open({ path = entry[1] })
                 end
               end)
               return true
