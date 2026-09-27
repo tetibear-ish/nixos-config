@@ -35,6 +35,8 @@
 
       customRC = ''
         lua << EOF
+        vim.cmd('packloadall')
+
         vim.g.mapleader = ' '
 
         -- Basic settings
