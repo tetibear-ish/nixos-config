@@ -132,13 +132,28 @@ in
         vim.keymap.set('n', '<leader>pa', function()
           local path = vim.fn.input('Add project: ', vim.fn.getcwd(), 'dir')
           if path ~= ''' then
-            require('project.core').set_pwd(path, 'manual', vim.api.nvim_get_current_buf())
-            vim.notify('Project added: ' .. path)
+            path = vim.fn.fnamemodify(path, ':p')
+            if path:sub(-1) == '/' then path = path:sub(1, -2) end
+            if vim.fn.isdirectory(path) == 0 then
+              vim.notify('Not a directory: ' .. path, vim.log.levels.WARN)
+              return
+            end
+            local history = require('project.util.history')
+            history.session_projects = history.session_projects or {}
+            for _, v in ipairs(history.session_projects) do
+              if (type(v) == 'table' and v.path or v) == path then
+                vim.notify('Already in projects: ' .. path)
+                return
+              end
+            end
+            table.insert(history.session_projects, 1, { path = path, name = vim.fs.basename(path) })
+            history.write_history()
+            vim.notify('Added: ' .. path)
           end
         end, { desc = 'Add project' })
 
         local function pick_project()
-          local recent = require('project').get_recent_projects()
+          local recent = require('project').get_recent_projects(true) -- paths_only
           local pickers  = require('telescope.pickers')
           local finders  = require('telescope.finders')
           local conf     = require('telescope.config').values
