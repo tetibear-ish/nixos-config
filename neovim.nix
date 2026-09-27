@@ -35,11 +35,8 @@
 
       customRC = ''
         lua << EOF
-        vim.cmd('packloadall')
-
         vim.g.mapleader = ' '
 
-        -- Basic settings
         vim.opt.number         = true
         vim.opt.relativenumber = true
         vim.opt.expandtab      = true
@@ -58,79 +55,87 @@
         vim.opt.splitright     = true
         vim.opt.splitbelow     = true
 
-        -- Treesitter
-        require('nvim-treesitter.configs').setup {
-          highlight = { enable = true },
-          indent    = { enable = true },
-        }
+        -- Defer all plugin setup until VimEnter so packages are fully loaded
+        vim.api.nvim_create_autocmd('VimEnter', {
+          once = true,
+          callback = function()
 
-        -- Completion
-        local cmp     = require('cmp')
-        local luasnip = require('luasnip')
-        require('luasnip.loaders.from_vscode').lazy_load()
-        cmp.setup {
-          snippet = {
-            expand = function(args) luasnip.lsp_expand(args.body) end,
-          },
-          mapping = cmp.mapping.preset.insert {
-            ['<C-Space>'] = cmp.mapping.complete(),
-            ['<CR>']      = cmp.mapping.confirm { select = true },
-            ['<Tab>'] = cmp.mapping(function(fallback)
-              if cmp.visible() then cmp.select_next_item()
-              elseif luasnip.expand_or_jumpable() then luasnip.expand_or_jump()
-              else fallback() end
-            end, { 'i', 's' }),
-            ['<S-Tab>'] = cmp.mapping(function(fallback)
-              if cmp.visible() then cmp.select_prev_item()
-              elseif luasnip.jumpable(-1) then luasnip.jump(-1)
-              else fallback() end
-            end, { 'i', 's' }),
-          },
-          sources = cmp.config.sources(
-            { { name = 'nvim_lsp' }, { name = 'luasnip' } },
-            { { name = 'buffer' },   { name = 'path' } }
-          ),
-        }
+            -- Treesitter
+            require('nvim-treesitter.configs').setup {
+              highlight = { enable = true },
+              indent    = { enable = true },
+            }
 
-        -- LSP
-        local lsp  = require('lspconfig')
-        local caps = require('cmp_nvim_lsp').default_capabilities()
-        lsp.lua_ls.setup  { capabilities = caps }
-        lsp.nil_ls.setup  { capabilities = caps }
-        lsp.pyright.setup { capabilities = caps }
+            -- Completion
+            local cmp     = require('cmp')
+            local luasnip = require('luasnip')
+            require('luasnip.loaders.from_vscode').lazy_load()
+            cmp.setup {
+              snippet = {
+                expand = function(args) luasnip.lsp_expand(args.body) end,
+              },
+              mapping = cmp.mapping.preset.insert {
+                ['<C-Space>'] = cmp.mapping.complete(),
+                ['<CR>']      = cmp.mapping.confirm { select = true },
+                ['<Tab>'] = cmp.mapping(function(fallback)
+                  if cmp.visible() then cmp.select_next_item()
+                  elseif luasnip.expand_or_jumpable() then luasnip.expand_or_jump()
+                  else fallback() end
+                end, { 'i', 's' }),
+                ['<S-Tab>'] = cmp.mapping(function(fallback)
+                  if cmp.visible() then cmp.select_prev_item()
+                  elseif luasnip.jumpable(-1) then luasnip.jump(-1)
+                  else fallback() end
+                end, { 'i', 's' }),
+              },
+              sources = cmp.config.sources(
+                { { name = 'nvim_lsp' }, { name = 'luasnip' } },
+                { { name = 'buffer' },   { name = 'path' } }
+              ),
+            }
 
-        vim.keymap.set('n', 'gd',           vim.lsp.buf.definition,  { desc = 'Go to definition' })
-        vim.keymap.set('n', 'K',            vim.lsp.buf.hover,        { desc = 'Hover docs' })
-        vim.keymap.set('n', '<leader>rn',   vim.lsp.buf.rename,       { desc = 'Rename symbol' })
-        vim.keymap.set('n', '<leader>ca',   vim.lsp.buf.code_action,  { desc = 'Code action' })
-        vim.keymap.set('n', '[d',           vim.diagnostic.goto_prev, { desc = 'Prev diagnostic' })
-        vim.keymap.set('n', ']d',           vim.diagnostic.goto_next, { desc = 'Next diagnostic' })
+            -- LSP
+            local lsp  = require('lspconfig')
+            local caps = require('cmp_nvim_lsp').default_capabilities()
+            lsp.lua_ls.setup  { capabilities = caps }
+            lsp.nil_ls.setup  { capabilities = caps }
+            lsp.pyright.setup { capabilities = caps }
 
-        -- Telescope
-        require('telescope').setup {}
-        local b = require('telescope.builtin')
-        vim.keymap.set('n', '<leader>ff', b.find_files, { desc = 'Find files' })
-        vim.keymap.set('n', '<leader>fg', b.live_grep,  { desc = 'Live grep' })
-        vim.keymap.set('n', '<leader>fb', b.buffers,    { desc = 'Buffers' })
-        vim.keymap.set('n', '<leader>fh', b.help_tags,  { desc = 'Help tags' })
+            vim.keymap.set('n', 'gd',         vim.lsp.buf.definition,  { desc = 'Go to definition' })
+            vim.keymap.set('n', 'K',           vim.lsp.buf.hover,        { desc = 'Hover docs' })
+            vim.keymap.set('n', '<leader>rn',  vim.lsp.buf.rename,       { desc = 'Rename symbol' })
+            vim.keymap.set('n', '<leader>ca',  vim.lsp.buf.code_action,  { desc = 'Code action' })
+            vim.keymap.set('n', '[d',          vim.diagnostic.goto_prev, { desc = 'Prev diagnostic' })
+            vim.keymap.set('n', ']d',          vim.diagnostic.goto_next, { desc = 'Next diagnostic' })
 
-        -- Projects
-        require('project_nvim').setup {
-          detection_methods = { 'lsp', 'pattern' },
-          patterns = { '.git', 'flake.nix', 'Makefile', 'package.json', 'cargo.toml' },
-        }
-        require('telescope').load_extension('projects')
-        vim.keymap.set('n', '<leader>fp', function()
-          require('telescope').extensions.projects.projects {}
-        end, { desc = 'Projects' })
+            -- Telescope
+            require('telescope').setup {}
+            local b = require('telescope.builtin')
+            vim.keymap.set('n', '<leader>ff', b.find_files, { desc = 'Find files' })
+            vim.keymap.set('n', '<leader>fg', b.live_grep,  { desc = 'Live grep' })
+            vim.keymap.set('n', '<leader>fb', b.buffers,    { desc = 'Buffers' })
+            vim.keymap.set('n', '<leader>fh', b.help_tags,  { desc = 'Help tags' })
 
-        -- File tree
-        require('nvim-tree').setup {
-          view     = { width = 30 },
-          renderer = { group_empty = true },
-          filters  = { dotfiles = false },
-        }
-        vim.keymap.set('n', '<leader>e', ':NvimTreeToggle<CR>', { desc = 'Toggle file tree' })
+            -- Projects
+            require('project_nvim').setup {
+              detection_methods = { 'lsp', 'pattern' },
+              patterns = { '.git', 'flake.nix', 'Makefile', 'package.json', 'cargo.toml' },
+            }
+            require('telescope').load_extension('projects')
+            vim.keymap.set('n', '<leader>fp', function()
+              require('telescope').extensions.projects.projects {}
+            end, { desc = 'Projects' })
+
+            -- File tree
+            require('nvim-tree').setup {
+              view     = { width = 30 },
+              renderer = { group_empty = true },
+              filters  = { dotfiles = false },
+            }
+            vim.keymap.set('n', '<leader>e', ':NvimTreeToggle<CR>', { desc = 'Toggle file tree' })
+
+          end
+        })
         EOF
       '';
     };
