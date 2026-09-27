@@ -66,11 +66,13 @@ in
         vim.opt.splitright     = true
         vim.opt.splitbelow     = true
 
-        -- Treesitter
-        require('nvim-treesitter.configs').setup {
-          highlight = { enable = true },
-          indent    = { enable = true },
-        }
+        -- Treesitter (0.10 API: highlight via neovim native, indent via nvim-treesitter)
+        vim.api.nvim_create_autocmd('FileType', {
+          callback = function(ev)
+            pcall(vim.treesitter.start, ev.buf)
+            vim.bo[ev.buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+          end,
+        })
 
         -- Completion
         local cmp     = require('cmp')
