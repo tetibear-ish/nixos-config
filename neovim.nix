@@ -102,12 +102,12 @@ in
           ),
         }
 
-        -- LSP
-        local lsp  = require('lspconfig')
+        -- LSP (nvim 0.11 native API)
         local caps = require('cmp_nvim_lsp').default_capabilities()
-        lsp.lua_ls.setup  { capabilities = caps }
-        lsp.nil_ls.setup  { capabilities = caps }
-        lsp.pyright.setup { capabilities = caps }
+        vim.lsp.config('lua_ls',  { capabilities = caps })
+        vim.lsp.config('nil_ls',  { capabilities = caps })
+        vim.lsp.config('pyright', { capabilities = caps })
+        vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright' })
 
         vim.keymap.set('n', 'gd',         vim.lsp.buf.definition,  { desc = 'Go to definition' })
         vim.keymap.set('n', 'K',          vim.lsp.buf.hover,        { desc = 'Hover docs' })
@@ -124,14 +124,34 @@ in
         vim.keymap.set('n', '<leader>fb', b.buffers,    { desc = 'Buffers' })
         vim.keymap.set('n', '<leader>fh', b.help_tags,  { desc = 'Help tags' })
 
-        -- Projects
-        require('project_nvim').setup {
+        -- Projects (project.nvim 4.1.1 — no telescope extension, use manual picker)
+        require('project').setup {
           detection_methods = { 'lsp', 'pattern' },
           patterns = { '.git', 'flake.nix', 'Makefile', 'package.json', 'cargo.toml' },
         }
-        require('telescope').load_extension('projects')
         vim.keymap.set('n', '<leader>fp', function()
-          require('telescope').extensions.projects.projects {}
+          local recent = require('project').get_recent_projects()
+          local pickers  = require('telescope.pickers')
+          local finders  = require('telescope.finders')
+          local conf     = require('telescope.config').values
+          local actions  = require('telescope.actions')
+          local state    = require('telescope.actions.state')
+          pickers.new({}, {
+            prompt_title = 'Projects',
+            finder  = finders.new_table { results = recent },
+            sorter  = conf.generic_sorter({}),
+            attach_mappings = function(prompt_bufnr)
+              actions.select_default:replace(function()
+                local entry = state.get_selected_entry()
+                actions.close(prompt_bufnr)
+                if entry then
+                  vim.cmd('cd ' .. entry[1])
+                  require('telescope.builtin').find_files { cwd = entry[1] }
+                end
+              end)
+              return true
+            end,
+          }):find()
         end, { desc = 'Projects' })
 
         -- File tree
