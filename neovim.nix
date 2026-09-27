@@ -137,7 +137,7 @@ in
           end
         end, { desc = 'Add project' })
 
-        vim.keymap.set('n', '<leader>fp', function()
+        local function pick_project()
           local recent = require('project').get_recent_projects()
           local pickers  = require('telescope.pickers')
           local finders  = require('telescope.finders')
@@ -160,7 +160,9 @@ in
               return true
             end,
           }):find()
-        end, { desc = 'Projects' })
+        end
+        vim.keymap.set('n', '<leader>pp', pick_project, { desc = 'Switch project' })
+        vim.keymap.set('n', '<leader>fp', pick_project, { desc = 'Switch project' })
 
         -- File tree
         require('nvim-tree').setup {
