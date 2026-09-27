@@ -33,6 +33,8 @@
       set rtp+=${nvim-tree-lua}
 
       lua << EOF
+      if vim.loader then vim.loader.enable() end
+
       vim.g.mapleader = ' '
 
       vim.opt.number         = true
