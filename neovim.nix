@@ -131,7 +131,7 @@ in
         }
         vim.keymap.set('n', '<leader>pa', function()
           local path = vim.fn.input('Add project: ', vim.fn.getcwd(), 'dir')
-          if path ~= '' then
+          if path ~= ''' then
             require('project.core').set_pwd(path, 'manual', vim.api.nvim_get_current_buf())
             vim.notify('Project added: ' .. path)
           end
