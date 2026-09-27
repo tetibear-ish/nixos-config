@@ -141,7 +141,7 @@ in
         -- Projects (project.nvim 4.1.1 — no telescope extension, use manual picker)
         require('project').setup {
           detection_methods = { 'lsp', 'pattern' },
-          patterns = { '.git', 'flake.nix', 'Makefile', 'package.json', 'cargo.toml' },
+          patterns = { 'pom.xml', 'build.gradle', 'build.gradle.kts', '.git', 'flake.nix', 'Makefile', 'package.json', 'cargo.toml' },
         }
         vim.keymap.set('n', '<leader>pa', function()
           local path = vim.fn.input('Add project: ', vim.fn.getcwd(), 'dir')
@@ -211,8 +211,12 @@ in
           return (ok and root) or vim.fn.getcwd()
         end
         local function do_run(cmd, root)
+          local has_flake = vim.fn.filereadable(root .. '/flake.nix') == 1
+          local full_cmd = has_flake
+            and 'nix --extra-experimental-features "nix-command flakes" develop --command bash -c ' .. vim.fn.shellescape(cmd)
+            or cmd
           vim.cmd('botright 15split')
-          vim.fn.termopen(cmd, { cwd = root })
+          vim.fn.termopen(full_cmd, { cwd = root })
         end
         local function set_run_cmd(cb)
           local root = project_root()
