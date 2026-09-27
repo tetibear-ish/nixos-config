@@ -26,10 +26,11 @@ in
 {
   environment.systemPackages = with pkgs; [
     lua-language-server
-    nil       # Nix LSP
-    pyright   # Python LSP
-    ripgrep   # Telescope live grep
-    fd        # Telescope find files
+    nil                   # Nix LSP
+    pyright               # Python LSP
+    jdt-language-server   # Java LSP
+    ripgrep               # Telescope live grep
+    fd                    # Telescope find files
   ];
 
   programs.neovim = {
@@ -107,7 +108,17 @@ in
         vim.lsp.config('lua_ls',  { capabilities = caps })
         vim.lsp.config('nil_ls',  { capabilities = caps })
         vim.lsp.config('pyright', { capabilities = caps })
-        vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright' })
+        vim.lsp.config('jdtls', {
+          capabilities = caps,
+          cmd = {
+            'jdtls',
+            '-configuration', vim.fn.expand('~/.cache/jdtls/config'),
+            '-data',          vim.fn.expand('~/.cache/jdtls/workspace'),
+          },
+          filetypes    = { 'java' },
+          root_markers = { 'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', '.git' },
+        })
+        vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright', 'jdtls' })
 
         vim.keymap.set('n', 'gd',         vim.lsp.buf.definition,  { desc = 'Go to definition' })
         vim.keymap.set('n', 'K',          vim.lsp.buf.hover,        { desc = 'Hover docs' })
