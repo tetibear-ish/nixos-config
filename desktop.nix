@@ -95,6 +95,7 @@
     (python3.withPackages (ps: with ps; [ pip ]))
     codex
     renpy
+    emacs-pgtk
     kitty
     waybar
     wofi
