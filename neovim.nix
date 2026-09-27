@@ -120,6 +120,9 @@ in
         })
         vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright', 'jdtls' })
 
+        vim.keymap.set('n', '[b', ':bprevious<CR>', { desc = 'Previous buffer' })
+        vim.keymap.set('n', ']b', ':bnext<CR>',     { desc = 'Next buffer' })
+
         vim.keymap.set('n', 'gd',         vim.lsp.buf.definition,  { desc = 'Go to definition' })
         vim.keymap.set('n', 'K',          vim.lsp.buf.hover,        { desc = 'Hover docs' })
         vim.keymap.set('n', '<leader>rn', vim.lsp.buf.rename,       { desc = 'Rename symbol' })
