@@ -4,13 +4,14 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   inputs.nixos-generators.url = "github:nix-community/nixos-generators";
   inputs.nixos-generators.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.nixified-ai.url = "github:nixified-ai/flake";
 
-  outputs = { self, nixpkgs, nixos-generators }:
+  outputs = { self, nixpkgs, nixos-generators, nixified-ai }:
     let
       lib = nixpkgs.lib;
 
       hosts = {
-        hoshimi = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./hoshimi.nix ./minecraft.nix ]; };
+        hoshimi = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./hoshimi.nix ./minecraft.nix ./comfyui.nix nixified-ai.nixosModules.comfyui ]; };
         nixos   = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./kraken.nix ]; };
         deli    = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ]; };
         # INSTALLER: new hosts appended below this line
