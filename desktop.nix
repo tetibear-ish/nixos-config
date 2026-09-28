@@ -14,6 +14,7 @@
 
   fonts.packages = with pkgs; [
     nerd-fonts.hack
+    nerd-fonts.symbols-only  # icon glyphs for Doom Emacs's modeline (nerd-icons)
     powerline-fonts
     powerline
   ];
@@ -96,6 +97,9 @@
     codex
     renpy
     emacs-pgtk
+    gcc            # Doom needs a C toolchain to build native modules (vterm)
+    gnumake
+    libtool
     kitty
     waybar
     wofi
@@ -103,9 +107,13 @@
     hyprlock
   ];
 
-  # OBS via Flatpak gets the proper com.obsproject.Studio app ID
-  # which is required for xdg-desktop-portal ScreenCast to work on Wayland.
-  # After rebuild: flatpak install flathub com.obsproject.Studio
+  programs.obs-studio = {
+    enable = true;
+    plugins = with pkgs.obs-studio-plugins; [
+      obs-pipewire-audio-capture
+    ];
+  };
+
   services.flatpak.enable = true;
 
   xdg.portal = {
