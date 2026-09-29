@@ -16,6 +16,7 @@ let
     telescope-nvim
     project-nvim
     nvim-tree-lua
+    vim-projectionist
   ];
 
   # Build a Lua package.path string covering every plugin's lua/ directory.
@@ -158,6 +159,35 @@ in
           filters  = { dotfiles = false },
         }
         vim.keymap.set('n', '<leader>e', ':NvimTreeToggle<CR>', { desc = 'Toggle file tree' })
+
+        -- Projectionist: jump to a file's test (or back), creating the buffer if missing.
+        -- "*" matches across directories (equiv. to "**/*"), so this covers nested packages.
+        vim.g.projectionist_heuristics = {
+          ['build.gradle.kts'] = {
+            ['src/main/kotlin/*.kt'] = {
+              type = 'source',
+              alternate = 'src/test/kotlin/{}Test.kt',
+            },
+            ['src/test/kotlin/*Test.kt'] = {
+              type = 'test',
+              alternate = 'src/main/kotlin/{}.kt',
+              template = {
+                'package {dirname|dot}',
+                "",
+                'import org.junit.jupiter.api.Test',
+                "",
+                'class {basename}Test {',
+                '    @Test',
+                '    fun example() {',
+                '    }',
+                '}',
+              },
+            },
+          },
+        }
+        vim.keymap.set('n', '<leader>a',  ':A<CR>',  { desc = 'Alternate (test) file' })
+        vim.keymap.set('n', '<leader>as', ':AS<CR>', { desc = 'Alternate file (split)' })
+        vim.keymap.set('n', '<leader>av', ':AV<CR>', { desc = 'Alternate file (vsplit)' })
         EOF
       '';
     };
