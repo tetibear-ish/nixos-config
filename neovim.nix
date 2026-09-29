@@ -152,6 +152,56 @@ in
           patterns = { 'pom.xml', 'build.gradle', 'build.gradle.kts', '.git', 'flake.nix', 'Makefile', 'package.json', 'cargo.toml' },
         }
 
+        -- Project run (<leader>pr run, <leader>pR set command)
+        local run_file = vim.fn.stdpath('data') .. '/project_run.json'
+        local function load_run_cmds()
+          local f = io.open(run_file, 'r')
+          if not f then return {} end
+          local ok, data = pcall(vim.json.decode, f:read('*a'))
+          f:close()
+          return (ok and data) or {}
+        end
+        local function save_run_cmds(cmds)
+          local f = io.open(run_file, 'w')
+          if f then f:write(vim.json.encode(cmds)); f:close() end
+        end
+        local function project_root()
+          local ok, root = pcall(require('project.core').get_project_root)
+          return (ok and root) or vim.fn.getcwd()
+        end
+        local function do_run(cmd, root)
+          local has_flake = vim.fn.filereadable(root .. '/flake.nix') == 1
+          local full_cmd = has_flake
+            and 'nix --extra-experimental-features "nix-command flakes" develop --command bash -c ' .. vim.fn.shellescape(cmd)
+            or cmd
+          vim.cmd('botright 15split')
+          vim.fn.termopen(full_cmd, { cwd = root })
+        end
+        local function set_run_cmd(cb)
+          local root = project_root()
+          local name = vim.fn.fnamemodify(root, ':t')
+          vim.ui.input({ prompt = 'Run command for [' .. name .. ']: ' }, function(cmd)
+            if cmd and cmd ~= "" then
+              local cmds = load_run_cmds()
+              cmds[root] = cmd
+              save_run_cmds(cmds)
+              if cb then cb(cmd, root) end
+            end
+          end)
+        end
+        vim.keymap.set('n', '<leader>pr', function()
+          local root = project_root()
+          local cmds = load_run_cmds()
+          if cmds[root] then
+            do_run(cmds[root], root)
+          else
+            set_run_cmd(do_run)
+          end
+        end, { desc = 'Run project' })
+        vim.keymap.set('n', '<leader>pR', function()
+          set_run_cmd(do_run)
+        end, { desc = 'Set project run command' })
+
         -- File tree
         require('nvim-tree').setup {
           view     = { width = 30 },
@@ -185,9 +235,9 @@ in
             },
           },
         }
-        vim.keymap.set('n', '<leader>a',  ':A<CR>',  { desc = 'Alternate (test) file' })
-        vim.keymap.set('n', '<leader>as', ':AS<CR>', { desc = 'Alternate file (split)' })
-        vim.keymap.set('n', '<leader>av', ':AV<CR>', { desc = 'Alternate file (vsplit)' })
+        vim.keymap.set('n', '<leader>gt',  ':A<CR>',  { desc = 'Goto test (alternate file)' })
+        vim.keymap.set('n', '<leader>gts', ':AS<CR>', { desc = 'Goto test (split)' })
+        vim.keymap.set('n', '<leader>gtv', ':AV<CR>', { desc = 'Goto test (vsplit)' })
         EOF
       '';
     };
