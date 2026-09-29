@@ -28,7 +28,8 @@ in
     lua-language-server
     nil                   # Nix LSP
     pyright               # Python LSP
-    jdt-language-server   # Java LSP
+    jdt-language-server      # Java LSP
+    kotlin-language-server   # Kotlin LSP
     ripgrep               # Telescope live grep
     fd                    # Telescope find files
   ];
@@ -118,7 +119,11 @@ in
           filetypes    = { 'java' },
           root_markers = { 'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', '.git' },
         })
-        vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright', 'jdtls' })
+        vim.lsp.config('kotlin_language_server', {
+          capabilities = caps,
+          root_markers = { 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', '.git' },
+        })
+        vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright', 'jdtls', 'kotlin_language_server' })
 
         vim.keymap.set('n', '[b', ':bprevious<CR>', { desc = 'Previous buffer' })
         vim.keymap.set('n', ']b', ':bnext<CR>',     { desc = 'Next buffer' })
