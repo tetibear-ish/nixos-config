@@ -125,6 +125,8 @@ in
         })
         vim.lsp.enable({ 'lua_ls', 'nil_ls', 'pyright', 'jdtls', 'kotlin_language_server' })
 
+        vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' })
+
         vim.keymap.set('n', '[b', ':bprevious<CR>', { desc = 'Previous buffer' })
         vim.keymap.set('n', ']b', ':bnext<CR>',     { desc = 'Next buffer' })
 
