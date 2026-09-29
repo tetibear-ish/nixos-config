@@ -71,6 +71,7 @@ in
     tmux
     flash
     test-iso
+    gradle
   #  wget
   ];
 
