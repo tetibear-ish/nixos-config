@@ -201,6 +201,9 @@ in
         vim.keymap.set('n', '<leader>pR', function()
           set_run_cmd(do_run)
         end, { desc = 'Set project run command' })
+        vim.keymap.set('n', '<leader>pt', function()
+          do_run('./gradlew test', project_root())
+        end, { desc = 'Run tests' })
 
         -- File tree
         require('nvim-tree').setup {
