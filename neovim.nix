@@ -139,7 +139,15 @@ in
         vim.keymap.set('n', ']d',         vim.diagnostic.goto_next, { desc = 'Next diagnostic' })
 
         -- Telescope
-        require('telescope').setup {}
+        local telescope_actions = require('telescope.actions')
+        require('telescope').setup {
+          defaults = {
+            mappings = {
+              i = { ['<C-g>'] = telescope_actions.close },
+              n = { ['<C-g>'] = telescope_actions.close },
+            },
+          },
+        }
         local b = require('telescope.builtin')
         vim.keymap.set('n', '<leader>ff', b.find_files, { desc = 'Find files' })
         vim.keymap.set('n', '<leader>fg', b.live_grep,  { desc = 'Live grep' })
@@ -169,13 +177,23 @@ in
           local ok, root = pcall(require('project.core').get_project_root)
           return (ok and root) or vim.fn.getcwd()
         end
+        local runner_buf = nil
         local function do_run(cmd, root)
           local has_flake = vim.fn.filereadable(root .. '/flake.nix') == 1
           local full_cmd = has_flake
             and 'nix --extra-experimental-features "nix-command flakes" develop --command bash -c ' .. vim.fn.shellescape(cmd)
             or cmd
-          vim.cmd('botright 15split')
+          -- Wipe any previous runner buffer/window first, so a stale terminal
+          -- never gets split (which would just duplicate the old buffer and
+          -- make termopen fail silently instead of starting a fresh job).
+          if runner_buf and vim.api.nvim_buf_is_valid(runner_buf) then
+            vim.api.nvim_buf_delete(runner_buf, { force = true })
+          end
+          -- Use :new (blank buffer), not :split (clones the active buffer) —
+          -- splitting NvimTree's buffer makes it force-close the duplicate.
+          vim.cmd('botright 15new')
           vim.fn.termopen(full_cmd, { cwd = root })
+          runner_buf = vim.api.nvim_get_current_buf()
         end
         local function set_run_cmd(cb)
           local root = project_root()
