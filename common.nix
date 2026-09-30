@@ -72,6 +72,7 @@ in
     flash
     test-iso
     gradle
+    cmake
   #  wget
   ];
 
