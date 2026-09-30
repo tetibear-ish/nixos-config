@@ -2,13 +2,13 @@
 # brand-new install (via the installer) stays free-software-only. Add this
 # to a host's extraModules in flake.nix (or import it manually) once you
 # want the proprietary apps on that machine.
-{ config, pkgs, ... }:
+{ config, pkgs, unstable, ... }:
 
 {
   nixpkgs.config.allowUnfree = true;
 
   environment.systemPackages = with pkgs; [
-    claude-code
+    unstable.claude-code
     google-chrome
     discord
     spotify
