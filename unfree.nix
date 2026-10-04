@@ -13,6 +13,7 @@
     discord
     spotify
     vscode
+    jetbrains.idea   # IntelliJ IDEA (unified; replaces discontinued Community edition)
     (unityhub.overrideAttrs (old: {
       # Unity Editor's bundled UnityShaderCompiler needs libtinfo.so.6 or
       # asset import hangs/crashes. nixpkgs' ncurses only ships libtinfo.so.6
