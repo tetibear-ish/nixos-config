@@ -16,6 +16,16 @@
     DynamicUser = lib.mkForce false;
   };
 
+  # Allow tetibear to start/stop comfyui without a password prompt
+  security.sudo.extraRules = [{
+    users = [ "tetibear" ];
+    commands = [
+      { command = "/run/current-system/sw/bin/systemctl start comfyui";   options = [ "NOPASSWD" ]; }
+      { command = "/run/current-system/sw/bin/systemctl stop comfyui";    options = [ "NOPASSWD" ]; }
+      { command = "/run/current-system/sw/bin/systemctl restart comfyui"; options = [ "NOPASSWD" ]; }
+    ];
+  }];
+
   # Pre-create model subdirectories owned by tetibear
   system.activationScripts.comfyui-models.text = ''
     for dir in checkpoints loras vae controlnet clip unet upscale_models; do

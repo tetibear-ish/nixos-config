@@ -2,6 +2,28 @@
 { config, pkgs, ... }:
 
 let
+  agnesTachyonTheme = pkgs.runCommand "plymouth-theme-agnes-tachyon" {} ''
+    themeDir=$out/share/plymouth/themes/agnes-tachyon
+    mkdir -p $themeDir
+    cp ${./agnes-tachyon.png} $themeDir/background.png
+    cat > $themeDir/agnes-tachyon.script << 'EOF'
+    background_image = Image("background.png");
+    screen = Screen();
+    bg = Sprite();
+    bg.SetImage(background_image.Scale(screen.GetWidth(), screen.GetHeight()));
+    bg.SetZ(-100);
+    EOF
+    cat > $themeDir/agnes-tachyon.plymouth << EOF
+    [Plymouth Theme]
+    Name=Agnes Tachyon
+    ModuleName=script
+
+    [script]
+    ImageDir=$themeDir
+    ScriptFile=$themeDir/agnes-tachyon.script
+    EOF
+  '';
+
   flash = pkgs.writeShellApplication {
     name = "flash";
     runtimeInputs = with pkgs; [ util-linux coreutils ];
@@ -19,6 +41,13 @@ in
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
+
+  boot.plymouth = {
+    enable = true;
+    theme = "agnes-tachyon";
+    themePackages = [ agnesTachyonTheme ];
+  };
+  boot.kernelParams = [ "quiet" "splash" ];
 
   # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
 
