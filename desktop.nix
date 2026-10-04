@@ -10,6 +10,8 @@
     wayland.enable = true;
   };
   services.desktopManager.plasma6.enable = true;
+  services.desktopManager.gnome.enable = true;
+  programs.seahorse.enable = false; # conflicts with KDE's ksshaskpass for ssh.askPassword
   programs.hyprland.enable = true;
 
   fonts.packages = with pkgs; [
@@ -105,6 +107,7 @@
     wofi
     hyprpaper
     hyprlock
+    keymapp
   ];
 
   programs.obs-studio = {
@@ -126,4 +129,7 @@
     enable = true;
     enable32Bit = true;
   };
+
+  # ZSA Moonlander udev rules — lets keymapp/wally flash without root
+  hardware.keyboard.zsa.enable = true;
 }
