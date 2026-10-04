@@ -35,6 +35,11 @@
     options = "ctrl:nocaps";
   };
 
+  # GNOME ignores services.xserver.xkb.options and uses its own dconf key instead.
+  programs.dconf.profiles.user.databases = [{
+    settings."org/gnome/desktop/input-sources".xkb-options = [ "ctrl:nocaps" ];
+  }];
+
   # Enable CUPS to print documents.
   services.printing.enable = true;
 

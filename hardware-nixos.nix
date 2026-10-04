@@ -9,7 +9,7 @@
     ];
 
   boot.initrd.availableKernelModules = [ "nvme" "xhci_pci" "ahci" "usb_storage" "usbhid" "sd_mod" ];
-  boot.initrd.kernelModules = [ ];
+  boot.initrd.kernelModules = [ "amdgpu" ];  # load GPU driver early so Plymouth has a display
   boot.kernelModules = [ "kvm-amd" ];
   boot.extraModulePackages = [ ];
 
@@ -25,7 +25,7 @@
     };
 
   swapDevices =
-    [ { device = "/dev/disk/by-uuid/1f8316ca-4f0b-4fff-8eb8-390037690e13"; }
+    [ { device = "/dev/disk/by-uuid/86f1bf9f-a86f-4b4f-826b-489f9431bd06"; }
     ];
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
