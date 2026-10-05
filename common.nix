@@ -102,8 +102,12 @@ in
     test-iso
     gradle
     cmake
+    dotnetCorePackages.sdk_10_0
   #  wget
   ];
+
+  # Lets dotnet global tools and editor extensions (C# Dev Kit, Rider) find the SDK.
+  environment.variables.DOTNET_ROOT = "${pkgs.dotnetCorePackages.sdk_10_0}/share/dotnet";
 
   programs.zsh = {
     enable = true;
