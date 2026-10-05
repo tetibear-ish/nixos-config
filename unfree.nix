@@ -9,7 +9,10 @@
 
   environment.systemPackages = with pkgs; [
     unstable.claude-code
-    google-chrome
+    # Chrome 153 segfaults at startup with GTK 4 under native Wayland
+    # (GTK 4 + X11 and GTK 3 + Wayland both work). Pin it to GTK 3, which
+    # keeps it on Wayland. Drop this once a Chrome/GTK update fixes it.
+    (google-chrome.override { commandLineArgs = "--gtk-version=3"; })
     discord
     spotify
     vscode

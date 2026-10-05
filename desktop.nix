@@ -127,7 +127,9 @@
   xdg.portal = {
     enable = true;
     extraPortals = [ pkgs.kdePackages.xdg-desktop-portal-kde ];
-    config.common.default = "kde";
+    # No global default: Plasma, GNOME and Hyprland each ship a
+    # <desktop>-portals.conf, so every session uses its own portal. Forcing
+    # "kde" everywhere made GNOME's file dialogs crash the KDE portal.
   };
 
   hardware.graphics = {
