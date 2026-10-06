@@ -2,17 +2,19 @@
 { config, pkgs, unstable, ... }:
 
 let
+  # Animated boot splash. Frames come from ./plymouth-frames (any frame-*.png names;
+  # gaps are fine) and are renumbered 0..N-1 in sorted order for the script.
   agnesTachyonTheme = pkgs.runCommand "plymouth-theme-agnes-tachyon" {} ''
     themeDir=$out/share/plymouth/themes/agnes-tachyon
     mkdir -p $themeDir
-    cp ${./agnes-tachyon.png} $themeDir/background.png
-    cat > $themeDir/agnes-tachyon.script << 'EOF'
-    background_image = Image("background.png");
-    screen = Screen();
-    bg = Sprite();
-    bg.SetImage(background_image.Scale(screen.GetWidth(), screen.GetHeight()));
-    bg.SetZ(-100);
-    EOF
+    n=0
+    for f in ${./plymouth-frames}/frame-*.png; do
+      cp "$f" "$themeDir/$n.png"
+      n=$((n + 1))
+    done
+    substitute ${./agnes-tachyon.script} $themeDir/agnes-tachyon.script \
+      --subst-var-by frameCount "$n" \
+      --subst-var-by fps 15
     cat > $themeDir/agnes-tachyon.plymouth << EOF
     [Plymouth Theme]
     Name=Agnes Tachyon

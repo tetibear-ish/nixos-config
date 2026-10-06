@@ -1,0 +1,46 @@
+// Agnes Tachyon boot splash: loops frames 0.png .. (frame_count - 1).png,
+// letterboxed on black. @frameCount@ and @fps@ are filled in by common.nix.
+
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+frame_count = @frameCount@;
+fps = @fps@;
+
+// Fit the frame to the screen width (or height, if the screen is wider than the clip).
+first = Image("0.png");
+scale = Window.GetWidth() / first.GetWidth();
+if (first.GetHeight() * scale > Window.GetHeight())
+  scale = Window.GetHeight() / first.GetHeight();
+draw_w = Math.Int(first.GetWidth() * scale);
+draw_h = Math.Int(first.GetHeight() * scale);
+
+sprite = Sprite();
+sprite.SetX(Math.Int((Window.GetWidth() - draw_w) / 2));
+sprite.SetY(Math.Int((Window.GetHeight() - draw_h) / 2));
+
+// Frames are decoded and scaled the first time they are shown, then reused.
+for (i = 0; i < frame_count; i++)
+  loaded[i] = 0;
+
+tick = 0;
+shown = -1;
+
+// Plymouth calls this 50 times a second.
+fun refresh_callback ()
+{
+  index = Math.Int(global.tick * global.fps / 50) % global.frame_count;
+  if (index != global.shown)
+  {
+    if (!global.loaded[index])
+    {
+      global.frames[index] = Image(index + ".png").Scale(global.draw_w, global.draw_h);
+      global.loaded[index] = 1;
+    }
+    global.sprite.SetImage(global.frames[index]);
+    global.shown = index;
+  }
+  global.tick++;
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
