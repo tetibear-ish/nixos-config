@@ -43,6 +43,8 @@ in
   # Bootloader.
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
+  # Skip the generation menu; hold Space while booting to bring it back for a rollback.
+  boot.loader.timeout = 0;
 
   boot.plymouth = {
     enable = true;
