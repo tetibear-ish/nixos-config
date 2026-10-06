@@ -1,5 +1,5 @@
 # Shared base config, imported by desktop.nix and server.nix.
-{ config, pkgs, ... }:
+{ config, pkgs, unstable, ... }:
 
 let
   agnesTachyonTheme = pkgs.runCommand "plymouth-theme-agnes-tachyon" {} ''
@@ -111,6 +111,13 @@ in
 
   programs.zsh = {
     enable = true;
+    # ytclip: YouTube section -> PNG frames for a Plymouth theme (see ytclip.zsh).
+    interactiveShellInit = ''
+      source ${pkgs.replaceVars ./ytclip.zsh {
+        ytdlp = "${unstable.yt-dlp}/bin/yt-dlp";
+        ffmpeg = "${unstable.ffmpeg-headless}/bin/ffmpeg";
+      }}
+    '';
     ohMyZsh = {
       enable = true;
       theme = "kawaii";
