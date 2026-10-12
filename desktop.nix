@@ -113,6 +113,7 @@
     hyprpaper
     hyprlock
     keymapp
+    piper-tts      # offline neural TTS; voice models (.onnx) are downloaded separately
   ];
 
   programs.obs-studio = {
