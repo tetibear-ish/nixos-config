@@ -206,6 +206,20 @@ in
     AllowHybridSleep = false;
   };
 
+  # Keep logs and crash dumps from filling the disk. A Unity Hub crash once
+  # filled / while its core dump was being written, and DrKonqi crashing on
+  # each new dump left ~1000 more; cores over ProcessSizeMax are logged but
+  # never written out.
+  services.journald.extraConfig = ''
+    SystemMaxUse=1G
+  '';
+  systemd.coredump.settings.Coredump = {
+    ProcessSizeMax = "1G";
+    ExternalSizeMax = "1G";
+    MaxUse = "1G";
+    KeepFree = "10G";
+  };
+
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
   networking.firewall.allowedUDPPortRanges = [ { from = 60000; to = 61000; } ];
