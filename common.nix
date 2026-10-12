@@ -110,6 +110,7 @@ in
     gradle
     cmake
     dotnetCorePackages.sdk_10_0
+    ffmpeg
   #  wget
   ];
 
