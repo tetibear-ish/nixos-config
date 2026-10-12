@@ -4,6 +4,8 @@ NixOS flake configuration for two machines: **hoshimi** and **nixos**.
 
 Once set up, each machine automatically pulls the latest config from GitHub and runs `nixos-rebuild switch` on every boot. See **First-time setup** below to onboard a new machine.
 
+The boot update never discards local work. With a checkout at `~/nixos-config`, it only fast-forwards a clean `main` to GitHub's and switches to it. If the checkout has uncommitted or untracked changes, commits not on GitHub, or another branch checked out, it skips the update and keeps the current system (`journalctl -u nixos-upgrade-on-boot` says why). Machines without a checkout switch straight to GitHub's config.
+
 ## Machines
 
 | Host | Hardware |

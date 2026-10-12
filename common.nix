@@ -181,13 +181,49 @@ in
       RemainAfterExit = true;
       TimeoutStartSec = 300;
     };
-    path = with pkgs; [ nixos-rebuild nix git ];
+    path = with pkgs; [ nixos-rebuild nix git util-linux ];
+    # Never discards local work: with a checkout at ~/nixos-config, it only
+    # fast-forwards a clean `main` to GitHub's. Uncommitted or untracked
+    # changes, unpushed commits, or another branch checked out all skip the
+    # update and keep the current system.
     script = ''
+      repo=/home/tetibear/nixos-config
+      url=https://github.com/tetibear-ish/nixos-config.git
+      host=${config.networking.hostName}
+      as_user() { runuser -u tetibear -- "$@"; }
+
       if systemctl cat nixos-rebuild-switch-to-configuration.service >/dev/null 2>&1; then
         echo "Another nixos-rebuild is already in progress, skipping."
         exit 0
       fi
-      nixos-rebuild switch --flake github:tetibear-ish/nixos-config --no-write-lock-file
+
+      if [ ! -d "$repo/.git" ]; then
+        echo "No checkout at $repo; switching to GitHub's config."
+        nixos-rebuild switch --flake "github:tetibear-ish/nixos-config#$host" --no-write-lock-file
+        exit 0
+      fi
+
+      if ! as_user git -C "$repo" fetch --quiet "$url" "+refs/heads/main:refs/remotes/origin/main"; then
+        echo "Fetch failed; keeping the current system."
+        exit 0
+      fi
+
+      branch=$(as_user git -C "$repo" symbolic-ref --quiet --short HEAD || true)
+      if [ "$branch" != main ]; then
+        echo "Checkout is on '$branch', not main; keeping the current system."
+        exit 0
+      fi
+      if [ -n "$(as_user git -C "$repo" status --porcelain)" ]; then
+        echo "Checkout has uncommitted or untracked changes; keeping the current system."
+        exit 0
+      fi
+      if ! as_user git -C "$repo" merge-base --is-ancestor HEAD origin/main; then
+        echo "Checkout has commits not on GitHub; keeping the current system."
+        exit 0
+      fi
+
+      as_user git -C "$repo" merge --ff-only --quiet origin/main
+      nixos-rebuild switch --flake "$repo#$host"
     '';
   };
   networking.firewall.trustedInterfaces = [ "tailscale0" ];
