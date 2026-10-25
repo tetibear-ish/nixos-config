@@ -1,0 +1,6 @@
+{
+  "uuid": "notifications-bottom-left@tetibear",
+  "name": "Notifications Bottom Left",
+  "description": "Show notification banners in the bottom-left corner of the leftmost monitor.",
+  "shell-version": ["50"]
+}

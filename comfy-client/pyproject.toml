@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfy-client"
+version = "0.1.0"
+description = "Small ComfyUI HTTP API client and `comfy` CLI"
+requires-python = ">=3.10"
+
+[project.scripts]
+comfy = "comfy:main"
+
+[tool.setuptools]
+py-modules = ["comfy"]

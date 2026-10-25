@@ -38,7 +38,7 @@ let
   };
 in
 {
-  imports = [ ./neovim.nix ];
+  imports = [ ./neovim.nix ./managed-services.nix ];
 
   # Bootloader.
   boot.loader.systemd-boot.enable = true;

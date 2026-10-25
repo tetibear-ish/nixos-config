@@ -13,7 +13,7 @@
 
       hosts = {
         hoshimi = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./hoshimi.nix ./minecraft.nix ./comfyui.nix nixified-ai.nixosModules.comfyui ]; };
-        nixos   = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./kraken.nix ]; };
+        nixos   = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ./kraken.nix ./nixos.nix ./comfyui.nix nixified-ai.nixosModules.comfyui ]; };
         deli    = { profile = ./desktop.nix; extraModules = [ ./unfree.nix ]; };
         # INSTALLER: new hosts appended below this line
       };

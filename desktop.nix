@@ -2,6 +2,14 @@
 # Unfree apps (Steam, Discord, Chrome, etc.) live in unfree.nix instead.
 { config, pkgs, ... }:
 
+let
+  # Local GNOME Shell extension: notification banners in the bottom-left of the leftmost monitor.
+  notificationsBottomLeft = pkgs.runCommand "gnome-shell-extension-notifications-bottom-left" {} ''
+    mkdir -p $out/share/gnome-shell/extensions
+    cp -r ${./gnome-extensions/notifications-bottom-left} \
+      $out/share/gnome-shell/extensions/notifications-bottom-left@tetibear
+  '';
+in
 {
   imports = [ ./common.nix ];
 
@@ -38,6 +46,7 @@
   # GNOME ignores services.xserver.xkb.options and uses its own dconf key instead.
   programs.dconf.profiles.user.databases = [{
     settings."org/gnome/desktop/input-sources".xkb-options = [ "ctrl:nocaps" ];
+    settings."org/gnome/shell".enabled-extensions = [ "notifications-bottom-left@tetibear" ];
   }];
 
   # Enable CUPS to print documents.
@@ -95,12 +104,13 @@
   programs.firefox.enable = true;
 
   environment.systemPackages = with pkgs; [
+    notificationsBottomLeft
     sweet
     wl-clipboard
     blender
     prismlauncher
     jre8
-    (python3.withPackages (ps: with ps; [ pip ]))
+    (python3.withPackages (ps: with ps; [ pip (ps.callPackage ./comfy-client { }) ]))  # comfy-client: `import comfy` + `comfy` CLI
     codex
     renpy
     emacs-pgtk

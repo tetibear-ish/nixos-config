@@ -13,6 +13,7 @@
     # (GTK 4 + X11 and GTK 3 + Wayland both work). Pin it to GTK 3, which
     # keeps it on Wayland. Drop this once a Chrome/GTK update fixes it.
     (google-chrome.override { commandLineArgs = "--gtk-version=3"; })
+    (callPackage ./chatgpt-desktop.nix { })   # official Linux preview; see the file for updating
     discord
     spotify
     vscode

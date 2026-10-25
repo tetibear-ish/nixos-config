@@ -34,6 +34,7 @@ in
     kotlin-language-server   # Kotlin LSP
     ripgrep               # Telescope live grep
     fd                    # Telescope find files
+    nodejs                # runs mason's node-based servers (bashls, ts_ls, pyright)
   ];
 
   programs.neovim = {
