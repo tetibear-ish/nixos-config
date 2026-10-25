@@ -13,6 +13,7 @@ Library use:
     comfy.get_workflow(url)                   # into the web UI's workflow library
     comfy.discover_models(tag="landscape", types=["lora"])  # Civitai models
     comfy.install_model(version_id)           # into models/<its folder>/
+    comfy.design_workflow("checkpoints/x.safetensors", "portraits")  # via Claude
 
 CLI use: `comfy --help`. Emacs drives the CLI with `--json`.
 
@@ -32,6 +33,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -140,7 +142,7 @@ class Comfy:
 
     def upload_image(self, path: str | os.PathLike, overwrite: bool = True) -> str:
         """Upload an image into the server's input/ dir; returns its name for LoadImage."""
-        path = Path(path)
+        path = Path(path).expanduser()
         boundary = uuid.uuid4().hex
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="overwrite"\r\n\r\n'
@@ -213,14 +215,29 @@ class Comfy:
 
     def run(self, workflow: Workflow, *, prompt: str | None = None,
             negative: str | None = None, seed: int | None = None,
-            set: dict[str, Any] | None = None, out_dir: str | os.PathLike = OUTPUT_DIR,
+            set: dict[str, Any] | None = None, images: list[str] | None = None,
+            out_dir: str | os.PathLike = OUTPUT_DIR,
             timeout: float | None = None, on_status: Any = None) -> list[Path]:
         """Run WORKFLOW to completion and download its outputs into OUT_DIR.
 
         PROMPT/NEGATIVE replace the text of the prompt nodes feeding the
         sampler; SEED pins every sampler seed (random otherwise); SET maps
-        "node_id.input" to a value for anything else.
+        "node_id.input" to a value for anything else. IMAGES are files to
+        upload into the workflow's LoadImage/LoadVideo nodes: "path" fills
+        them in order, "node_id=path" a specific one.
         """
+        set = dict(set or {})
+        slots = file_inputs(workflow)
+        for i, spec in enumerate(images or []):
+            node_id, sep, path = spec.partition("=")
+            if not sep or node_id not in workflow:
+                node_id, path = (slots[i][0] if i < len(slots) else None), spec
+            if node_id is None:
+                raise ComfyError(f"no LoadImage/LoadVideo node left for {spec!r}")
+            key = FILE_INPUT_NODES[workflow[node_id]["class_type"]]
+            set[f"{node_id}.{key}"] = self.upload_image(path)
+            if on_status:
+                on_status(f"uploaded {Path(path).name} into node {node_id}")
         wf = apply_inputs(workflow, prompt=prompt, negative=negative, seed=seed, set=set)
         prompt_id = self.submit(wf)
         if on_status:
@@ -465,6 +482,18 @@ CLASS_FOLDERS = {
     "GLIGENLoader": "gligen", "ModelPatchLoader": "model_patches",
     "AudioEncoderLoader": "audio_encoders",
 }
+# Inputs that take a file the user supplies at run time (uploaded into the
+# server's input/ dir), so they're filled per run rather than validated.
+FILE_INPUT_NODES = {"LoadImage": "image", "LoadImageMask": "image", "LoadVideo": "file"}
+
+
+def file_inputs(workflow: Workflow) -> list[tuple[str, str, str]]:
+    """(node_id, input_name, class_type) for each node that loads a user file."""
+    return [(node_id, FILE_INPUT_NODES[n["class_type"]], n["class_type"])
+            for node_id, n in workflow.items()
+            if isinstance(n, dict) and n.get("class_type") in FILE_INPUT_NODES]
+
+
 # Fallback by input name, for API-format nodes not in CLASS_FOLDERS.
 INPUT_FOLDERS = {
     "ckpt_name": "checkpoints", "unet_name": "diffusion_models", "vae_name": "vae",
@@ -1141,6 +1170,337 @@ def install_model(version_id: int, models_dir: str | os.PathLike = MODELS_DIR,
     return ref
 
 
+# -- AI workflow design --------------------------------------------------------
+
+# The design step asks Claude through the Claude Code CLI (`claude -p`), so it
+# uses that login; no separate API key. COMFY_CLAUDE_MODEL picks a model
+# (e.g. "sonnet"); unset uses the CLI's default.
+CLAUDE_COMMAND = os.environ.get("COMFY_CLAUDE_COMMAND", "claude")
+CLAUDE_MODEL = os.environ.get("COMFY_CLAUDE_MODEL")
+# Node categories left out of the catalog the model sees: paid API nodes and
+# areas unrelated to image/video generation, to keep the prompt small.
+CATALOG_SKIP = ("partner", "3d", "audio", "comfy cloud", "experimental", "api node")
+
+
+def installed_models(models_dir: str | os.PathLike = MODELS_DIR) -> list[dict]:
+    """Model files under MODELS_DIR: folder, name (relative to it), size."""
+    models_dir = Path(models_dir)
+    out = []
+    for root, _dirs, files in os.walk(models_dir, followlinks=True):
+        for f in files:
+            path = Path(root) / f
+            if not f.lower().endswith(MODEL_EXTENSIONS):
+                continue
+            rel = path.relative_to(models_dir)
+            out.append({"folder": rel.parts[0], "name": "/".join(rel.parts[1:]),
+                        "size": path.stat().st_size, "path": str(path)})
+    return sorted(out, key=lambda m: (m["folder"], m["name"].lower()))
+
+
+def file_sha256(path: str | os.PathLike) -> str:
+    """sha256 of PATH, cached by path/size/mtime (model files are big)."""
+    path = Path(path)
+    st = path.stat()
+    key = f"{path}:{st.st_size}:{st.st_mtime_ns}"
+    cache = CACHE_DIR / "hashes.json"
+    hashes = json.loads(cache.read_text()) if cache.exists() else {}
+    if key not in hashes:
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(1 << 22):
+                digest.update(chunk)
+        hashes[key] = digest.hexdigest()
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(hashes))
+    return hashes[key]
+
+
+def identify_model(path: str | os.PathLike) -> dict:
+    """What's known about a local model file: Civitai's record (by sha256),
+    else the Hugging Face repo that has a file of that name."""
+    path = Path(path)
+    info: dict[str, Any] = {"file": path.name, "folder": path.parent.name}
+    try:
+        version = _civitai_get(f"model-versions/by-hash/{file_sha256(path)}")
+        model = version.get("model") or {}
+        desc = html.unescape(re.sub(r"<[^>]+>", " ", (version.get("description") or "") + " " +
+                                    (model.get("description") or "")))
+        info.update({
+            "source": "civitai", "name": model.get("name"), "type": model.get("type"),
+            "base_model": version.get("baseModel"), "version": version.get("name"),
+            "trigger_words": version.get("trainedWords") or [],
+            "notes": re.sub(r"\s+", " ", desc).strip()[:1500],
+            "page": f"https://civitai.com/models/{version.get('modelId')}?modelVersionId={version.get('id')}",
+        })
+        return info
+    except (ComfyError, OSError, KeyError):
+        pass
+    try:
+        hits = hf_index().get(path.name, [])
+    except (OSError, ValueError):
+        hits = []
+    if hits:
+        info.update({"source": "huggingface", "repos": sorted({h[0] for h in hits})})
+    return info
+
+
+def _input_spec(spec: list) -> tuple[Any, dict]:
+    kind = spec[0]
+    opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    if kind == "COMBO":  # newer schema: options live in the dict
+        kind = opts.get("options", [])
+    return kind, opts
+
+
+def node_catalog(object_info: dict) -> str:
+    """One compact line per usable node: Name(input: TYPE=default, combo: [a|b], ...) -> OUTPUTS."""
+    lines = []
+    for name, node in sorted(object_info.items()):
+        category = (node.get("category") or "").lower()
+        if node.get("api_node") or category.startswith(CATALOG_SKIP) or node.get("deprecated"):
+            continue
+        parts = []
+        for section in ("required", "optional"):
+            for key, spec in (node.get("input", {}).get(section) or {}).items():
+                kind, opts = _input_spec(spec)
+                if isinstance(kind, list):
+                    shown = "|".join(map(str, kind[:40])) + ("|…" if len(kind) > 40 else "")
+                    text = f"[{shown}]"
+                else:
+                    text = str(kind)
+                    if kind in ("INT", "FLOAT", "BOOLEAN") and "default" in opts:
+                        text += f"={opts['default']}"
+                parts.append(f"{key}{'?' if section == 'optional' else ''}: {text}")
+        outputs = ", ".join(f"{o}" for o in node.get("output", []))
+        lines.append(f"{name}({', '.join(parts)}) -> {outputs or '(output node)'}"
+                     + (" [OUTPUT]" if node.get("output_node") else ""))
+    return "\n".join(lines)
+
+
+def validate_workflow(workflow: Any, object_info: dict) -> tuple[list[str], list[dict]]:
+    """Check an API-format workflow against the server's node definitions
+    without running it. Returns (errors, missing_models); a model file a
+    loader can't find is reported as missing rather than as an error."""
+    errors: list[str] = []
+    missing: list[dict] = []
+    if not isinstance(workflow, dict) or not workflow:
+        return ["workflow must be a non-empty object of node_id -> {class_type, inputs}"], []
+    has_output = False
+    for node_id, node in workflow.items():
+        where = f"node {node_id}"
+        if not isinstance(node, dict) or "class_type" not in node:
+            errors.append(f"{where}: needs class_type and inputs")
+            continue
+        ct = node["class_type"]
+        where = f"node {node_id} ({ct})"
+        if ct not in object_info:
+            errors.append(f"{where}: unknown node type (not installed on this server)")
+            continue
+        info = object_info[ct]
+        has_output = has_output or bool(info.get("output_node"))
+        spec_in = info.get("input", {})
+        required = spec_in.get("required") or {}
+        optional = spec_in.get("optional") or {}
+        inputs = node.get("inputs") or {}
+        for key in required:
+            if key not in inputs:
+                errors.append(f"{where}: missing required input {key!r}")
+        for key, value in inputs.items():
+            spec = required.get(key) or optional.get(key)
+            if spec is None:
+                if key not in (spec_in.get("hidden") or {}):
+                    errors.append(f"{where}: no input named {key!r} (inputs: {', '.join(list(required) + list(optional))})")
+                continue
+            kind, opts = _input_spec(spec)
+            if isinstance(value, list) and len(value) == 2 and isinstance(value[1], int):
+                src_id = str(value[0])
+                src = workflow.get(src_id)
+                if not isinstance(src, dict) or src.get("class_type") not in object_info:
+                    errors.append(f"{where}: input {key!r} links to missing/invalid node {src_id}")
+                    continue
+                outputs = object_info[src["class_type"]].get("output", [])
+                if value[1] >= len(outputs):
+                    errors.append(f"{where}: input {key!r} uses output {value[1]} of node {src_id}, "
+                                  f"which has only {len(outputs)} ({', '.join(map(str, outputs))})")
+                    continue
+                out_type = outputs[value[1]]
+                if isinstance(kind, str) and "*" not in (kind, out_type) and \
+                        out_type not in kind.split(",") and kind != "COMBO":
+                    errors.append(f"{where}: input {key!r} expects {kind} but node {src_id} "
+                                  f"output {value[1]} is {out_type}")
+                continue
+            if isinstance(kind, list):
+                if FILE_INPUT_NODES.get(ct) == key or opts.get("image_upload") or opts.get("video_upload"):
+                    if not isinstance(value, str):
+                        errors.append(f"{where}: {key} must be a file name string")
+                    continue  # supplied per run (`comfy run --image')
+                if value not in kind:
+                    if isinstance(value, str) and value.lower().endswith(MODEL_EXTENSIONS):
+                        missing.append({"name": value, "folder": CLASS_FOLDERS.get(ct)
+                                        or INPUT_FOLDERS.get(key.rstrip("0123456789")), "node": node_id})
+                    else:
+                        errors.append(f"{where}: {key}={value!r} isn't one of: "
+                                      + ", ".join(map(str, kind[:25])) + (" …" if len(kind) > 25 else ""))
+            elif kind == "INT" or kind == "FLOAT":
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool) and \
+                    (kind == "FLOAT" or float(value).is_integer())
+                if not ok:
+                    errors.append(f"{where}: {key} must be {kind}, got {value!r}")
+                elif ("min" in opts and value < opts["min"]) or ("max" in opts and value > opts["max"]):
+                    errors.append(f"{where}: {key}={value} outside [{opts.get('min')}, {opts.get('max')}]")
+            elif kind == "BOOLEAN" and not isinstance(value, bool):
+                errors.append(f"{where}: {key} must be true/false, got {value!r}")
+            elif kind == "STRING" and not isinstance(value, str):
+                errors.append(f"{where}: {key} must be a string, got {value!r}")
+    if not has_output:
+        errors.append("no output node (e.g. SaveImage) so nothing would run")
+    return errors, missing
+
+
+DESIGN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "short name, e.g. 'SD1.5 portrait txt2img'"},
+        "description": {"type": "string", "description": "what the workflow does and how to use it"},
+        "positive_prompt": {"type": "string"},
+        "negative_prompt": {"type": "string"},
+        "notes": {"type": "string", "description": "settings chosen and why; tips; caveats"},
+        "missing_models": {"type": "array", "items": {"type": "object", "properties": {
+            "name": {"type": "string"}, "folder": {"type": "string"}}, "required": ["name", "folder"]}},
+        "workflow": {"type": "object", "description": "ComfyUI API-format workflow",
+                     "additionalProperties": {"type": "object", "properties": {
+                         "class_type": {"type": "string"}, "inputs": {"type": "object"}},
+                         "required": ["class_type", "inputs"]}},
+    },
+    "required": ["title", "description", "positive_prompt", "negative_prompt", "notes",
+                 "missing_models", "workflow"],
+}
+
+DESIGN_SYSTEM = """You design ComfyUI workflows in API format: a JSON object mapping node ids
+("1", "2", ...) to {"class_type": ..., "inputs": {...}}. An input is either a literal
+value or a link [source_node_id_string, output_index].
+
+Rules:
+- Use only node types from the catalog, with exactly the input names it lists (inputs
+  marked ? are optional). Literal values must be valid for the input's type/choices.
+- Links must connect an output of the right type (the catalog shows each node's outputs
+  in order; output_index is 0-based).
+- Build the workflow around the given model, using its loader node (checkpoints:
+  CheckpointLoaderSimple; diffusion_models: UNETLoader plus the right text encoder via
+  CLIPLoader/DualCLIPLoader and VAE via VAELoader; loras: LoraLoader on top of a
+  compatible base checkpoint; upscale_models: UpscaleModelLoader + ImageUpscaleWithModel;
+  vae/controlnet/etc. likewise).
+- Prefer models already installed. If the model needs companion files that aren't
+  installed (a base checkpoint for a LoRA, text encoders, VAE), use the standard official
+  file names (as Comfy-Org repackages them on Hugging Face) and list each in
+  missing_models with its models/ folder.
+- Use settings suited to the model's base architecture (native resolution, steps, cfg,
+  sampler/scheduler, any ModelSampling node) and the author's notes. Include LoRA trigger
+  words in the prompt.
+- Put a short, neutral example prompt in the positive text node and a matching negative
+  prompt (or empty if the model doesn't use one); return them in positive_prompt and
+  negative_prompt too.
+- For an input image (img2img, inpainting, upscaling, image-to-video) use LoadImage
+  with image "input.png" (LoadVideo with file "input.mp4" for video); the user picks the
+  real file when running it. Don't replace it with generated placeholders.
+- End with an output node (SaveImage for images; for video, a node that saves video).
+- Keep it as simple as the goal allows. The GPU is an AMD RX 6800 XT (16 GB, ROCm)."""
+
+
+def _ask_claude(prompt: str, on_status: Any = None) -> dict:
+    cmd = [CLAUDE_COMMAND, "-p", "--tools", "", "--no-session-persistence",
+           "--output-format", "json", "--json-schema", json.dumps(DESIGN_SCHEMA),
+           "--system-prompt", DESIGN_SYSTEM]
+    if CLAUDE_MODEL:
+        cmd += ["--model", CLAUDE_MODEL]
+    try:
+        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=900,
+                              cwd=str(CACHE_DIR))
+    except FileNotFoundError:
+        raise ComfyError(f"{CLAUDE_COMMAND!r} (Claude Code CLI) not found; set COMFY_CLAUDE_COMMAND") from None
+    except subprocess.TimeoutExpired:
+        raise ComfyError("Claude took too long (15 min)") from None
+    try:
+        result = json.loads(proc.stdout)
+    except ValueError:
+        raise ComfyError(f"claude failed: {(proc.stderr or proc.stdout).strip()[:500]}") from None
+    if result.get("is_error") or not isinstance(result.get("structured_output"), dict):
+        raise ComfyError(f"claude failed: {str(result.get('result') or result)[:500]}")
+    if on_status:
+        # Token counts, not total_cost_usd: that's an API-price estimate the
+        # CLI reports even on a claude.ai plan, where nothing is billed per call.
+        usage = result.get("usage") or {}
+        tokens_in = sum(usage.get(k) or 0 for k in
+                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        on_status(f"Claude answered ({tokens_in // 1000}k tokens in, "
+                  f"{(usage.get('output_tokens') or 0) // 1000}k out)")
+    return result["structured_output"]
+
+
+def design_workflow(model: str, goal: str = "text to image", attempts: int = 4,
+                    server: "Comfy | None" = None, models_dir: str | os.PathLike = MODELS_DIR,
+                    out_dir: str | os.PathLike = WORKFLOW_DIR, on_status: Any = None) -> dict:
+    """Have Claude build an API-format workflow around MODEL (a "folder/name"
+    or file name under MODELS_DIR) for GOAL, validated against the server's
+    nodes (retrying with the errors), and save it to OUT_DIR."""
+    server = server or Comfy()
+    models_dir = Path(models_dir)
+    installed = installed_models(models_dir)
+    matches = [m for m in installed
+               if f"{m['folder']}/{m['name']}" == model or m["name"] == model
+               or m["name"].rsplit("/", 1)[-1] == model]
+    if not matches:
+        raise ComfyError(f"no installed model {model!r} under {models_dir}")
+    target = matches[0]
+    status = on_status or (lambda _msg: None)
+    status(f"identifying {target['name']} (hashing it the first time)")
+    info = identify_model(target["path"])
+    status("reading the server's node definitions")
+    object_info = server.get("/object_info")
+    catalog = node_catalog(object_info)
+    installed_text = "\n".join(f"{m['folder']}/{m['name']} ({_human(m['size'])})" for m in installed)
+    base_prompt = (
+        f"Goal: {goal}\n\n"
+        f"Model to build around: {target['folder']}/{target['name']}\n"
+        f"What's known about it:\n{json.dumps(info, indent=1, ensure_ascii=False)}\n\n"
+        f"Installed models (folder/name):\n{installed_text}\n\n"
+        f"Node catalog of this ComfyUI server:\n{catalog}\n")
+    prompt = base_prompt
+    design: dict = {}
+    errors: list[str] = []
+    missing: list[dict] = []
+    for attempt in range(1, attempts + 1):
+        status(f"asking Claude for a workflow (attempt {attempt}/{attempts})")
+        design = _ask_claude(prompt, status)
+        errors, missing = validate_workflow(design.get("workflow"), object_info)
+        if not errors:
+            break
+        status(f"{len(errors)} problem(s) found; asking Claude to fix them")
+        prompt = (base_prompt +
+                  "\nYour previous workflow had these problems:\n- " + "\n- ".join(errors) +
+                  "\n\nPrevious workflow:\n" + json.dumps(design.get("workflow"), indent=1) +
+                  "\n\nReturn a corrected version.")
+    if errors:
+        raise ComfyError(f"no valid workflow after {attempts} attempts; last problems: " + "; ".join(errors[:5]))
+    out_dir = Path(out_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = _slug(design["title"]).lower()
+    path = out_dir / f"{stem}.json"
+    n = 2
+    while path.exists():
+        path, n = out_dir / f"{stem}-{n}.json", n + 1
+    path.write_text(json.dumps(design["workflow"], indent=2))
+    path.with_suffix(".md").write_text(
+        f"# {design['title']}\n\nModel: {target['folder']}/{target['name']}\nGoal: {goal}\n\n"
+        f"{design['description']}\n\n## Prompt\n\n{design['positive_prompt']}\n\n"
+        f"## Negative prompt\n\n{design['negative_prompt']}\n\n## Notes\n\n{design['notes']}\n")
+    names = {m["name"] for m in missing} | {m["name"] for m in design.get("missing_models", [])}
+    return {"path": str(path), "name": path.stem, "title": design["title"],
+            "description": design["description"], "positive_prompt": design["positive_prompt"],
+            "negative_prompt": design["negative_prompt"], "notes": design["notes"],
+            "model": info, "attempts": attempt, "missing_models": sorted(names)}
+
+
 # -- CLI --------------------------------------------------------------------
 
 def _parse_set(pairs: Iterable[str]) -> dict[str, Any]:
@@ -1235,6 +1595,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("unsave", help="remove a model version from the saved list")
     p.add_argument("version_id", type=int)
 
+    p = sub.add_parser("installed", help="list installed model files")
+    p.add_argument("--models-dir", default=str(MODELS_DIR))
+    p = sub.add_parser("validate", help="check a workflow against the server's nodes without running it")
+    p.add_argument("workflow")
+    p = sub.add_parser("design", help="have Claude build a workflow around an installed model")
+    p.add_argument("model", help="installed model, as folder/name or just the file name")
+    p.add_argument("-g", "--goal", default="text to image",
+                   help='what it should do, e.g. "portrait photos", "img2img", "upscale x4"')
+    p.add_argument("--attempts", type=int, default=4, help="Claude calls allowed to fix validation errors")
+    p.add_argument("--models-dir", default=str(MODELS_DIR))
+
     p = sub.add_parser("run", help="run an API-format workflow file")
     p.add_argument("workflow", help=f"path, or a name in {WORKFLOW_DIR}")
     p.add_argument("-p", "--prompt", help="replace the positive prompt text")
@@ -1242,6 +1613,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--set", action="append", default=[], metavar="NODE.INPUT=VALUE",
                    help="override any node input (VALUE parsed as JSON if possible)")
     p.add_argument("--fetch", action="store_true", help="download missing models first (see `fetch`)")
+    p.add_argument("-i", "--image", action="append", default=[], metavar="[NODE=]FILE",
+                   help="upload FILE into the workflow's LoadImage/LoadVideo nodes (in order, or NODE)")
     add_run_opts(p)
 
     args = ap.parse_args(argv)
@@ -1308,6 +1681,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"{'  saved' if e['saved'] else ''}{'  installed' if e['installed'] else ''}"
                 f"\n    version {e['version_id']}  {e['page']}"
                 for e in data["entries"]) or "nothing found")
+        elif args.cmd == "installed":
+            items = installed_models(args.models_dir)
+            emit(items, "\n".join(f"{m['folder']}/{m['name']}  ({_human(m['size'])})" for m in items))
+        elif args.cmd == "validate":
+            errors, missing = validate_workflow(load_workflow(args.workflow), c.get("/object_info"))
+            emit({"errors": errors, "missing_models": missing},
+                 "\n".join([f"error: {e}" for e in errors] +
+                           [f"missing model: {m['folder']}/{m['name']} (node {m['node']})" for m in missing])
+                 or "ok")
+            if errors:
+                return 1
+        elif args.cmd == "design":
+            result = design_workflow(args.model, args.goal, args.attempts, c, args.models_dir,
+                                     on_status=status)
+            emit(result, f"saved {result['path']}\n\n{result['description']}\n\n"
+                         f"Prompt: {result['positive_prompt']}\n\n{result['notes']}"
+                 + (f"\n\nMissing models: {', '.join(result['missing_models'])}"
+                    if result["missing_models"] else ""))
         elif args.cmd == "tags":
             tags = model_tags(args.query)
             emit(tags, "\n".join(tags))
@@ -1353,6 +1744,7 @@ def main(argv: list[str] | None = None) -> int:
                             status(f"{r.name}: {r.status}: {r.error}")
                 files = c.run(load_workflow(args.workflow), prompt=args.prompt,
                               negative=args.negative, seed=args.seed, set=_parse_set(args.set),
+                              images=args.image,
                               out_dir=args.out, timeout=args.timeout, on_status=status)
             emit({"files": [str(f) for f in files]}, "\n".join(str(f) for f in files))
     except (ComfyError, OSError, ValueError) as e:
