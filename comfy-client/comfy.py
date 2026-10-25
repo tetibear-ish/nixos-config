@@ -1220,8 +1220,13 @@ def identify_model(path: str | os.PathLike) -> dict:
     else the Hugging Face repo that has a file of that name."""
     path = Path(path)
     info: dict[str, Any] = {"file": path.name, "folder": path.parent.name}
+    cache = CACHE_DIR / "model-info.json"
+    known = json.loads(cache.read_text()) if cache.exists() else {}
     try:
-        version = _civitai_get(f"model-versions/by-hash/{file_sha256(path)}")
+        sha = file_sha256(path)
+        if sha in known:
+            return {**known[sha], "file": path.name, "folder": path.parent.name}
+        version = _civitai_get(f"model-versions/by-hash/{sha}")
         model = version.get("model") or {}
         desc = html.unescape(re.sub(r"<[^>]+>", " ", (version.get("description") or "") + " " +
                                     (model.get("description") or "")))
@@ -1232,6 +1237,9 @@ def identify_model(path: str | os.PathLike) -> dict:
             "notes": re.sub(r"\s+", " ", desc).strip()[:1500],
             "page": f"https://civitai.com/models/{version.get('modelId')}?modelVersionId={version.get('id')}",
         })
+        known[sha] = info
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(known))
         return info
     except (ComfyError, OSError, KeyError):
         pass
@@ -1357,6 +1365,85 @@ def validate_workflow(workflow: Any, object_info: dict) -> tuple[list[str], list
     return errors, missing
 
 
+def find_installed(model: str, installed: list[dict] | None = None,
+                   models_dir: str | os.PathLike = MODELS_DIR) -> dict:
+    """The installed model MODEL names: "folder/name", or just the file name."""
+    for m in installed if installed is not None else installed_models(models_dir):
+        if model in (f"{m['folder']}/{m['name']}", m["name"], m["name"].rsplit("/", 1)[-1]):
+            return m
+    raise ComfyError(f"no installed model {model!r} under {models_dir}")
+
+
+# Goals offered per kind of model, most likely first (the first is the default).
+IMAGE_GOALS = ["text to image", "image to image", "inpainting", "text to image with a hires-fix upscale"]
+VIDEO_TERMS = r"\b(wan|hunyuan ?video|ltx|ltxv|mochi|cogvideo|svd|animatediff|video)"
+
+
+def suggest_goals(model: str, models_dir: str | os.PathLike = MODELS_DIR) -> dict:
+    """Goals that suit an installed MODEL, from rules over its folder, file
+    name and Civitai record (type, base model, name). Returns {"goals",
+    "default", "basis"}; any other goal can still be typed."""
+    target = find_installed(model, models_dir=models_dir)
+    info = identify_model(target["path"])
+    folder = target["folder"]
+    # One lowercase haystack, with separators turned into spaces so \b works
+    # on names like "wan2.1_i2v_480p".
+    text = re.sub(r"[_\-./]+", " ", " ".join(
+        str(x) for x in (target["name"], info.get("name"), info.get("base_model"), info.get("type"))
+        if x).lower())
+    has = lambda pattern: re.search(pattern, text) is not None
+    video = has(VIDEO_TERMS)
+    audio = has(r"\b(stable audio|ace ?step|audio|music|tts)")
+
+    if folder == "upscale_models" or info.get("type") == "Upscaler":
+        goals = ["upscale an image", "upscale a generated image (txt2img + upscale)"]
+    elif folder == "controlnet" or info.get("type") == "Controlnet":
+        goals = ["text to image guided by a control image (pose, depth or edges)",
+                 "restyle an image keeping its structure"]
+    elif folder == "embeddings" or info.get("type") == "TextualInversion":
+        goals = ["text to image using this embedding"]
+    elif folder in ("vae", "text_encoders", "clip", "clip_vision"):
+        # Companion files (by folder: Civitai sometimes lists these as
+        # checkpoints): suggest what their family is used for.
+        goals = ["text to video", "image to video"] if video else IMAGE_GOALS[:2]
+        goals = [f"{g} (using this {folder.rstrip('s').replace('_', ' ')})" for g in goals]
+    elif folder == "loras" or info.get("type") in ("LORA", "LoCon", "DoRA"):
+        goals = (["text to video using this LoRA", "image to video using this LoRA"] if video
+                 else ["text to image using this LoRA", "image to image using this LoRA"])
+        if video and has(r"\bi2v\b"):
+            goals.reverse()
+    elif audio and not video:
+        goals = ["text to music/audio"]
+    elif video:
+        if has(r"\bflf2v\b|first last"):
+            goals = ["first and last frame to video", "image to video"]
+        elif has(r"\bvace\b"):
+            goals = ["text to video", "image to video (reference image)",
+                     "video to video (restyle a clip, keeping its motion)"]
+        elif has(r"\bi2v\b|image to video|\bimg2vid"):
+            goals = ["image to video"]
+        elif has(r"\bti2v\b"):
+            goals = ["text to video", "image to video"]
+        elif has(r"\bt2v\b|text to video"):
+            goals = ["text to video", "text to image (single frame)"]
+        else:
+            goals = ["text to video", "image to video"]
+    elif has(r"\binpaint"):
+        goals = ["inpainting", "outpainting (extend an image)", "image to image"]
+    elif has(r"\bkontext\b|\bedit\b|\bomnigen|instruct ?pix"):
+        goals = ["edit an image with instructions", "image to image", "text to image"]
+    else:
+        goals = list(IMAGE_GOALS)
+
+    if info.get("source") == "civitai":
+        basis = f"Civitai: {info.get('type')}, {info.get('base_model')}"
+    elif info.get("source") == "huggingface":
+        basis = f"file name, from {', '.join(info.get('repos', [])[:2])}"
+    else:
+        basis = f"folder {folder}/ and file name"
+    return {"goals": goals, "default": goals[0], "basis": basis}
+
+
 DESIGN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1446,12 +1533,7 @@ def design_workflow(model: str, goal: str = "text to image", attempts: int = 4,
     server = server or Comfy()
     models_dir = Path(models_dir)
     installed = installed_models(models_dir)
-    matches = [m for m in installed
-               if f"{m['folder']}/{m['name']}" == model or m["name"] == model
-               or m["name"].rsplit("/", 1)[-1] == model]
-    if not matches:
-        raise ComfyError(f"no installed model {model!r} under {models_dir}")
-    target = matches[0]
+    target = find_installed(model, installed, models_dir)
     status = on_status or (lambda _msg: None)
     status(f"identifying {target['name']} (hashing it the first time)")
     info = identify_model(target["path"])
@@ -1599,6 +1681,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--models-dir", default=str(MODELS_DIR))
     p = sub.add_parser("validate", help="check a workflow against the server's nodes without running it")
     p.add_argument("workflow")
+    p = sub.add_parser("goals", help="workflow goals that suit an installed model")
+    p.add_argument("model", help="installed model, as folder/name or just the file name")
+    p.add_argument("--models-dir", default=str(MODELS_DIR))
     p = sub.add_parser("design", help="have Claude build a workflow around an installed model")
     p.add_argument("model", help="installed model, as folder/name or just the file name")
     p.add_argument("-g", "--goal", default="text to image",
@@ -1692,6 +1777,9 @@ def main(argv: list[str] | None = None) -> int:
                  or "ok")
             if errors:
                 return 1
+        elif args.cmd == "goals":
+            data = suggest_goals(args.model, args.models_dir)
+            emit(data, f"({data['basis']})\n" + "\n".join(data["goals"]))
         elif args.cmd == "design":
             result = design_workflow(args.model, args.goal, args.attempts, c, args.models_dir,
                                      on_status=status)
