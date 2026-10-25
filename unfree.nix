@@ -4,6 +4,42 @@
 # want the proprietary apps on that machine.
 { config, pkgs, unstable, ... }:
 
+let
+  # Unity editors installed by Hub are generic Linux binaries; they only find
+  # their libraries inside Hub's FHS sandbox. Runs one there, picking the
+  # version from $UNITY_VERSION, else the project's ProjectVersion.txt (from
+  # -projectPath or the current directory), else the newest installed.
+  unity-editor = pkgs.writeShellApplication {
+    name = "unity-editor";
+    text = ''
+      editors="''${UNITY_EDITORS:-$HOME/Unity/Hub/Editor}"
+      project=.
+      prev=
+      for arg in "$@"; do
+        [ "$prev" = "-projectPath" ] && project="$arg"
+        prev="$arg"
+      done
+
+      version="''${UNITY_VERSION:-}"
+      if [ -z "$version" ] && [ -f "$project/ProjectSettings/ProjectVersion.txt" ]; then
+        version=$(sed -n 's/^m_EditorVersion: //p' "$project/ProjectSettings/ProjectVersion.txt")
+      fi
+      if [ -z "$version" ]; then
+        version=$(find "$editors" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort -V | tail -n 1)
+      fi
+
+      editor="$editors/$version/Editor/Unity"
+      if [ ! -x "$editor" ]; then
+        echo "unity-editor: no editor for version '$version' at $editor" >&2
+        echo "Install it with: unityhub -- --headless install --version $version" >&2
+        exit 1
+      fi
+
+      export LD_LIBRARY_PATH="${pkgs.ncurses}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      exec ${pkgs.unityhub.fhsEnv}/bin/unityhub-fhs-env "$editor" "$@"
+    '';
+  };
+in
 {
   nixpkgs.config.allowUnfree = true;
 
@@ -31,6 +67,7 @@
           --prefix LD_LIBRARY_PATH : ${ncurses}/lib
       '';
     }))
+    unity-editor
   ];
 
   programs.steam = {
