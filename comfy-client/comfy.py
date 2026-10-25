@@ -8,6 +8,10 @@ Library use:
     wf = comfy.load_workflow("upscale.json")  # API-format export
     files = c.run(wf, prompt="...", set={"12.scale_by": 2})
 
+    comfy.fetch_models("some-workflow.json")  # download its missing models
+    comfy.browse("templates", query="qwen")  # shared workflows: templates/hf/civitai
+    comfy.get_workflow(url)                   # into the web UI's workflow library
+
 CLI use: `comfy --help`. Emacs drives the CLI with `--json`.
 
 Workflows must be in ComfyUI's *API* format: in the web UI, Workflow ->
@@ -18,21 +22,36 @@ queued directly.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import hashlib
+import html
+import io
 import json
 import os
 import random
+import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
+import zlib
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 DEFAULT_URL = "http://127.0.0.1:8188"
 OUTPUT_DIR = Path(os.environ.get("COMFY_OUTPUT_DIR", "~/comfy/outputs")).expanduser()
 WORKFLOW_DIR = Path(os.environ.get("COMFY_WORKFLOW_DIR", "~/comfy/workflows")).expanduser()
+# The server's models/ dir; `fetch` downloads into it, so it must run on the
+# server's machine (or see that dir some other way).
+MODELS_DIR = Path(os.environ.get("COMFY_MODELS_DIR", "/var/lib/comfyui/models")).expanduser()
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "comfy"
+# Hugging Face orgs whose repos are searched for models a workflow names
+# without a download URL. Comfy-Org repackages most official models.
+HF_AUTHORS = os.environ.get("COMFY_HF_AUTHORS", "Comfy-Org").split(",")
 
 # Inputs that hold a sampler seed; randomized on every run unless pinned, since
 # ComfyUI caches identical graphs and would otherwise return nothing new.
@@ -226,20 +245,81 @@ class Comfy:
 
 # -- Workflow helpers -----------------------------------------------------
 
-def load_workflow(path: str | os.PathLike) -> Workflow:
-    """Load an API-format workflow. A bare name is looked up in WORKFLOW_DIR."""
-    p = Path(path).expanduser()
-    if not p.exists() and not p.is_absolute():
-        for candidate in (WORKFLOW_DIR / p, WORKFLOW_DIR / f"{p}.json"):
-            if candidate.exists():
-                p = candidate
+def read_workflow(source: str | os.PathLike) -> list[dict]:
+    """Raw workflow document(s) from SOURCE: a path, a name in WORKFLOW_DIR,
+    an http(s) URL, or a PNG saved by ComfyUI (which embeds both the UI
+    "workflow" and the API "prompt"; both are returned)."""
+    source = str(source)
+    if source.startswith(("http://", "https://")):
+        url = source
+        if "github.com/" in url and "/blob/" in url:
+            url = url.replace("github.com/", "raw.githubusercontent.com/", 1).replace("/blob/", "/", 1)
+        with urllib.request.urlopen(_download_request(url), timeout=60) as resp:
+            raw = resp.read()
+        label = source
+    else:
+        p = Path(source).expanduser()
+        if not p.exists() and not p.is_absolute():
+            for candidate in (WORKFLOW_DIR / p, WORKFLOW_DIR / f"{p}.json"):
+                if candidate.exists():
+                    p = candidate
+                    break
+        if not p.exists():
+            raise ComfyError(f"no workflow {source!r} (looked in {WORKFLOW_DIR} too)")
+        raw = p.read_bytes()
+        label = str(p)
+    if raw.startswith(b"\x89PNG"):
+        chunks = _png_text(raw)
+        docs = [json.loads(chunks[k]) for k in ("prompt", "workflow") if k in chunks]
+        if not docs:
+            raise ComfyError(f"{label} has no embedded ComfyUI workflow")
+        return docs
+    try:
+        return [json.loads(raw)]
+    except ValueError:
+        raise ComfyError(f"{label} isn't JSON") from None
+
+
+def load_workflow(source: str | os.PathLike) -> Workflow:
+    """Load an API-format workflow (see `read_workflow' for SOURCE)."""
+    for data in read_workflow(source):
+        if "prompt" in data and isinstance(data["prompt"], dict):
+            data = data["prompt"]
+        if not _is_ui_format(data):
+            return data
+    raise ComfyError(f"{source} is a UI-format workflow; re-export it with Workflow -> Export (API)")
+
+
+def _is_ui_format(data: dict) -> bool:
+    return "nodes" in data and "links" in data
+
+
+def _png_text(raw: bytes) -> dict[str, str]:
+    """tEXt/iTXt/zTXt chunks of a PNG, which is where ComfyUI saves workflows."""
+    out, pos = {}, 8
+    while pos + 8 <= len(raw):
+        length = int.from_bytes(raw[pos:pos + 4], "big")
+        kind = raw[pos + 4:pos + 8]
+        body = raw[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        try:
+            if kind == b"tEXt":
+                key, _, value = body.partition(b"\0")
+                out[key.decode("latin-1")] = value.decode("utf-8", "replace")
+            elif kind == b"zTXt":
+                key, _, rest = body.partition(b"\0")
+                out[key.decode("latin-1")] = zlib.decompress(rest[1:]).decode("utf-8", "replace")
+            elif kind == b"iTXt":
+                key, _, rest = body.partition(b"\0")
+                compressed, rest = rest[0], rest[2:]
+                _lang, _, rest = rest.partition(b"\0")
+                _tkey, _, text = rest.partition(b"\0")
+                out[key.decode("latin-1")] = (zlib.decompress(text) if compressed else text).decode("utf-8", "replace")
+            elif kind == b"IEND":
                 break
-    data = json.loads(p.read_text())
-    if "nodes" in data and "links" in data:
-        raise ComfyError(f"{p} is a UI-format workflow; re-export it with Workflow -> Export (API)")
-    if "prompt" in data and isinstance(data["prompt"], dict):
-        data = data["prompt"]
-    return data
+        except (zlib.error, IndexError):
+            continue
+    return out
 
 
 def list_workflows(directory: str | os.PathLike = WORKFLOW_DIR) -> list[Path]:
@@ -355,6 +435,539 @@ def _execution_error(status: dict) -> str:
     return "workflow failed"
 
 
+# -- Model fetching -------------------------------------------------------
+
+MODEL_EXTENSIONS = (".safetensors", ".sft", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".onnx")
+
+# Folders under models/ (used to recognize a folder inside a download path).
+MODEL_FOLDERS = (
+    "checkpoints", "diffusion_models", "unet", "text_encoders", "clip", "vae", "loras",
+    "controlnet", "clip_vision", "upscale_models", "latent_upscale_models", "style_models",
+    "embeddings", "hypernetworks", "photomaker", "gligen", "vae_approx", "model_patches",
+    "audio_encoders", "diffusers",
+)
+
+# Which folder a loader node reads, for references that carry only a filename.
+CLASS_FOLDERS = {
+    "CheckpointLoaderSimple": "checkpoints", "CheckpointLoader": "checkpoints",
+    "ImageOnlyCheckpointLoader": "checkpoints", "unCLIPCheckpointLoader": "checkpoints",
+    "UNETLoader": "diffusion_models", "UnetLoaderGGUF": "unet",
+    "CLIPLoader": "text_encoders", "DualCLIPLoader": "text_encoders",
+    "TripleCLIPLoader": "text_encoders", "QuadrupleCLIPLoader": "text_encoders",
+    "CLIPLoaderGGUF": "text_encoders", "DualCLIPLoaderGGUF": "text_encoders",
+    "VAELoader": "vae", "LoraLoader": "loras", "LoraLoaderModelOnly": "loras",
+    "ControlNetLoader": "controlnet", "DiffControlNetLoader": "controlnet",
+    "CLIPVisionLoader": "clip_vision", "UpscaleModelLoader": "upscale_models",
+    "LatentUpscaleModelLoader": "latent_upscale_models", "StyleModelLoader": "style_models",
+    "HypernetworkLoader": "hypernetworks", "PhotoMakerLoader": "photomaker",
+    "GLIGENLoader": "gligen", "ModelPatchLoader": "model_patches",
+    "AudioEncoderLoader": "audio_encoders",
+}
+# Fallback by input name, for API-format nodes not in CLASS_FOLDERS.
+INPUT_FOLDERS = {
+    "ckpt_name": "checkpoints", "unet_name": "diffusion_models", "vae_name": "vae",
+    "lora_name": "loras", "control_net_name": "controlnet", "clip_name": "text_encoders",
+    "style_model_name": "style_models", "gligen_name": "gligen",
+}
+
+
+@dataclass
+class ModelRef:
+    name: str                      # as the workflow names it; may include a subfolder
+    directory: str | None = None   # folder under models/
+    url: str | None = None
+    sha256: str | None = None
+    size: int | None = None
+    source: str = "workflow"       # where the URL came from
+    status: str = ""               # present / missing / unresolved / downloaded / failed
+    path: str | None = None
+    error: str | None = None
+
+
+def model_refs(docs: list[dict]) -> list[ModelRef]:
+    """Every model file DOCS (UI- or API-format workflows) reference."""
+    refs: dict[str, ModelRef] = {}
+
+    def add(name: Any, directory: str | None = None, url: str | None = None,
+            sha256: str | None = None) -> None:
+        if not isinstance(name, str) or not name.lower().endswith(MODEL_EXTENSIONS):
+            return
+        name = name.replace("\\", "/")
+        ref = refs.setdefault(name, ModelRef(name))
+        ref.directory = ref.directory or directory
+        ref.url = ref.url or url
+        ref.sha256 = ref.sha256 or sha256
+
+    def add_listed(models: Any) -> None:
+        # The frontend's model metadata: [{name, url, directory, hash?, hash_type?}]
+        for m in models if isinstance(models, list) else []:
+            if isinstance(m, dict):
+                sha = m.get("hash") if str(m.get("hash_type", "")).lower() == "sha256" else None
+                add(m.get("name"), m.get("directory"), m.get("url"), sha)
+
+    def add_ui_nodes(nodes: Any) -> None:
+        for node in nodes if isinstance(nodes, list) else []:
+            add_listed((node.get("properties") or {}).get("models"))
+            folder = CLASS_FOLDERS.get(node.get("type"))
+            values = node.get("widgets_values")
+            for value in (values.values() if isinstance(values, dict) else values or []):
+                add(value, folder)
+
+    for data in docs:
+        if "prompt" in data and isinstance(data["prompt"], dict):
+            data = data["prompt"]
+        if _is_ui_format(data):
+            add_listed(data.get("models"))
+            add_ui_nodes(data.get("nodes"))
+            for sub in (data.get("definitions") or {}).get("subgraphs") or []:
+                add_ui_nodes(sub.get("nodes"))
+        else:
+            for node in data.values():
+                if not isinstance(node, dict):
+                    continue
+                for key, value in (node.get("inputs") or {}).items():
+                    add(value, CLASS_FOLDERS.get(node.get("class_type"))
+                        or INPUT_FOLDERS.get(key.rstrip("0123456789")))
+    return list(refs.values())
+
+
+def _folder_in_path(path: str) -> str | None:
+    parts = urllib.parse.unquote(path).split("/")
+    return next((part for part in reversed(parts[:-1]) if part in MODEL_FOLDERS), None)
+
+
+def hf_index(refresh: bool = False) -> dict[str, list[list[str]]]:
+    """basename -> [[repo, path in repo], ...] for every model file in
+    HF_AUTHORS' repos."""
+    return _hf_listing(refresh)["files"]
+
+
+def _hf_listing(refresh: bool = False) -> dict:
+    """Model files and example workflow JSONs in HF_AUTHORS' repos, from one
+    API call per author. Cached for a day in CACHE_DIR."""
+    cache = CACHE_DIR / "hf-index.json"
+    if not refresh and cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+        cached = json.loads(cache.read_text())
+        if cached.get("authors") == HF_AUTHORS and "workflows" in cached:
+            return cached
+    files: dict[str, list[list[str]]] = {}
+    workflows: list[list[str]] = []
+    for author in HF_AUTHORS:
+        url = ("https://huggingface.co/api/models?" +
+               urllib.parse.urlencode({"author": author, "limit": 1000, "full": "true"}))
+        with urllib.request.urlopen(_download_request(url), timeout=60) as resp:
+            for repo in json.load(resp):
+                for sibling in repo.get("siblings", []):
+                    path = sibling["rfilename"]
+                    if path.lower().endswith(MODEL_EXTENSIONS):
+                        files.setdefault(path.rsplit("/", 1)[-1], []).append([repo["id"], path])
+                    elif path.lower().endswith(".json") and "workflow" in path.lower():
+                        workflows.append([repo["id"], path])
+    listing = {"authors": HF_AUTHORS, "files": files, "workflows": workflows}
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(listing))
+    return listing
+
+
+def _hf_token() -> str | None:
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        path = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser() / "token"
+        token = path.read_text().strip() if path.exists() else None
+    return token or None
+
+
+def _civitai_token() -> str | None:
+    """$CIVITAI_TOKEN, else the contents of ~/.config/comfy/civitai-token."""
+    path = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "comfy" / "civitai-token"
+    return os.environ.get("CIVITAI_TOKEN") or (path.read_text().strip() if path.exists() else None) or None
+
+
+def _download_request(url: str, headers: dict[str, str] | None = None,
+                      method: str = "GET") -> urllib.request.Request:
+    """A request with the right credentials for URL's host (HF_TOKEN /
+    ~/.cache/huggingface/token, CIVITAI_TOKEN), never forwarded on redirects."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    if host.endswith("civitai.com") and (token := _civitai_token()):
+        url += ("&" if "?" in url else "?") + "token=" + token
+    req = urllib.request.Request(url, method=method,
+                                 headers={"User-Agent": "comfy-client/0.1", **(headers or {})})
+    if host == "huggingface.co" and (token := _hf_token()):
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
+    return req
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def _probe(ref: ModelRef) -> None:
+    """Fill REF's size, and its sha256 when the host publishes one (Hugging
+    Face does for LFS files, as X-Linked-Etag on the redirect to its CDN).
+    Same-host redirects (renamed repos) are followed and REF.url updated to
+    the final one, so credentials still apply when downloading."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    url = ref.url
+    for _hop in range(5):
+        try:
+            resp = opener.open(_download_request(url, method="HEAD"), timeout=30)
+            headers, location = resp.headers, None
+        except urllib.error.HTTPError as e:
+            if e.code not in (301, 302, 303, 307, 308):
+                hint = " (gated or private: needs an HF or Civitai token)" if e.code in (401, 403) else ""
+                raise ComfyError(f"{url} -> HTTP {e.code}{hint}") from None
+            headers, location = e.headers, urllib.parse.urljoin(url, e.headers.get("Location", ""))
+        if headers.get("X-Linked-Size") or not location:
+            break
+        if urllib.parse.urlparse(location).hostname != urllib.parse.urlparse(url).hostname:
+            headers = None  # off to a CDN without telling us the size; leave it unknown
+            break
+        url = location
+    ref.url = url
+    if headers is None:
+        return
+    size = headers.get("X-Linked-Size") or (None if location else headers.get("Content-Length"))
+    ref.size = int(size) if size and size.isdigit() else ref.size
+    etag = (headers.get("X-Linked-Etag") or "").strip('"')
+    if not ref.sha256 and len(etag) == 64:
+        ref.sha256 = etag
+
+
+def plan_models(source: str | os.PathLike, models_dir: str | os.PathLike = MODELS_DIR,
+                refresh_index: bool = False, probe: bool = True) -> list[ModelRef]:
+    """What SOURCE's workflow needs: each model as present (with its path),
+    missing (with a URL and folder to fetch it into) or unresolved."""
+    models_dir = Path(models_dir).expanduser()
+    if not models_dir.is_dir():
+        raise ComfyError(f"models dir {models_dir} doesn't exist; set COMFY_MODELS_DIR or "
+                         f"--models-dir (fetching must run where the server's models live)")
+    refs = model_refs(read_workflow(source))
+    local: dict[str, list[Path]] = {}
+    for root, _dirs, files in os.walk(models_dir, followlinks=True):
+        for f in files:
+            local.setdefault(f, []).append(Path(root) / f)
+    index = None
+    for ref in refs:
+        basename = ref.name.rsplit("/", 1)[-1]
+        found = [p for p in local.get(basename, []) if p.as_posix().endswith("/" + ref.name)]
+        if found:
+            exact = models_dir / (ref.directory or "") / ref.name
+            ref.status, ref.path = "present", str(exact if exact in found else found[0])
+            continue
+        if not ref.url:
+            if index is None:
+                try:
+                    index = hf_index(refresh_index)
+                except (OSError, ValueError) as e:
+                    index = {}
+                    ref.error = f"couldn't load the Hugging Face index: {e}"
+            candidates = index.get(basename, [])
+            # Prefer a copy filed under the folder we expect, then any.
+            candidates = sorted(candidates, key=lambda c: _folder_in_path(c[1]) != ref.directory)
+            if candidates:
+                repo, path = candidates[0]
+                ref.url = f"https://huggingface.co/{repo}/resolve/main/{urllib.parse.quote(path)}"
+                ref.source = f"huggingface:{repo}"
+                ref.directory = ref.directory or _folder_in_path(path)
+        if ref.url and not ref.directory:
+            ref.directory = _folder_in_path(urllib.parse.urlparse(ref.url).path)
+        if not (ref.url and ref.directory):
+            ref.status = "unresolved"
+            ref.error = ref.error or ("no download URL known" if not ref.url else
+                                      "can't tell which models/ folder it belongs in")
+            continue
+        ref.status = "missing"
+        ref.path = str(models_dir / ref.directory / ref.name)
+        if probe:
+            try:
+                _probe(ref)
+            except (ComfyError, OSError) as e:
+                ref.error = str(e)
+    return refs
+
+
+def download_model(ref: ModelRef, on_status: Any = None) -> Path:
+    """Download REF.url to REF.path, resuming a .part file, checking sha256."""
+    dest = Path(ref.path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    digest = hashlib.sha256() if ref.sha256 else None
+    if have and digest:
+        with open(part, "rb") as f:
+            while chunk := f.read(1 << 22):
+                digest.update(chunk)
+    if not (ref.size and have == ref.size):
+        req = _download_request(ref.url, {"Range": f"bytes={have}-"} if have else None)
+        try:
+            resp = urllib.request.urlopen(req, timeout=60)
+        except urllib.error.HTTPError as e:
+            hint = " (gated or private: needs an HF or Civitai token)" if e.code in (401, 403) else ""
+            raise ComfyError(f"{ref.url} -> HTTP {e.code}{hint}") from None
+        with resp:
+            if have and resp.status != 206:  # server ignored the Range; start over
+                have, digest = 0, (hashlib.sha256() if ref.sha256 else None)
+            length = resp.headers.get("Content-Length")
+            total = have + int(length) if length and length.isdigit() else ref.size
+            done, started, last = have, time.monotonic(), 0.0
+            with open(part, "ab" if have else "wb") as f:
+                while chunk := resp.read(1 << 20):
+                    f.write(chunk)
+                    if digest:
+                        digest.update(chunk)
+                    done += len(chunk)
+                    now = time.monotonic()
+                    if on_status and now - last >= 1:
+                        last = now
+                        rate = (done - have) / max(now - started, 1e-6)
+                        pct = f"{100 * done / total:.0f}% " if total else ""
+                        on_status(f"downloading {ref.name}: {pct}({_human(done)}"
+                                  f"{' / ' + _human(total) if total else ''}, {_human(rate)}/s)")
+    if digest and digest.hexdigest() != ref.sha256.lower():
+        part.unlink()
+        raise ComfyError(f"{ref.name}: sha256 mismatch, download discarded")
+    part.chmod(0o644)
+    part.rename(dest)
+    return dest
+
+
+def fetch_models(source: str | os.PathLike, models_dir: str | os.PathLike = MODELS_DIR,
+                 dry_run: bool = False, refresh_index: bool = False,
+                 on_status: Any = None) -> list[ModelRef]:
+    """Download every model SOURCE's workflow needs that isn't in MODELS_DIR
+    yet, into the folder its loader reads. Returns the plan with statuses."""
+    refs = plan_models(source, models_dir, refresh_index)
+    if dry_run:
+        return refs
+    for ref in refs:
+        if ref.status != "missing":
+            continue
+        try:
+            download_model(ref, on_status)
+            ref.status, ref.error = "downloaded", None
+            if on_status:
+                on_status(f"saved {ref.path}")
+        except (ComfyError, OSError) as e:
+            ref.status, ref.error = "failed", str(e)
+            if on_status:
+                on_status(f"{ref.name} failed: {e}")
+    return refs
+
+
+def _human(n: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n:.0f} B"
+        n /= 1024
+    return f"{n:.1f} GiB"
+
+
+# -- Browsing shared workflows ----------------------------------------------
+
+TEMPLATES_RAW = "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/main/templates/"
+# The web UI's own workflow library (its Workflows sidebar); `get' saves here.
+WEBUI_WORKFLOW_DIR = Path(os.environ.get(
+    "COMFY_WEBUI_WORKFLOW_DIR", "/var/lib/comfyui/user/default/workflows")).expanduser()
+BROWSE_SOURCES = ("templates", "hf", "civitai")
+
+
+def _cached_json(url: str, name: str, refresh: bool = False, max_age: float = 86400) -> Any:
+    path = CACHE_DIR / name
+    if not refresh and path.exists() and time.time() - path.stat().st_mtime < max_age:
+        return json.loads(path.read_text())
+    with urllib.request.urlopen(_download_request(url), timeout=60) as resp:
+        data = json.load(resp)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+    return data
+
+
+def _matches(entry: dict, query: str | None) -> bool:
+    if not query:
+        return True
+    hay = " ".join(str(entry.get(k) or "") for k in ("title", "description", "category")) + " " + \
+        " ".join(entry.get("tags") or []) + " " + " ".join(entry.get("models") or [])
+    return all(word in hay.lower() for word in query.lower().split())
+
+
+def _version_tuple(v: str | None) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def browse(source: str = "templates", query: str | None = None, include_api: bool = False,
+           refresh: bool = False, cursor: str | None = None, limit: int = 50,
+           server: "Comfy | None" = None) -> dict:
+    """Shared workflows from SOURCE ("templates": ComfyUI's official templates;
+    "hf": example workflows in HF_AUTHORS' repos; "civitai": Civitai's workflow
+    uploads). Returns {"entries": [...], "next": cursor or None}. Each entry
+    has title, description, tags, models, size, thumbnail, workflow (the URL
+    `get_workflow' takes) and page (a URL for people)."""
+    entries: list[dict] = []
+    next_cursor = None
+    if source == "templates":
+        for category in _cached_json(TEMPLATES_RAW + "index.json", "templates-index.json", refresh):
+            for t in category.get("templates", []):
+                if not include_api and not t.get("openSource", True):
+                    continue
+                name = t["name"]
+                entries.append({
+                    "id": name, "source": source, "title": t.get("title") or name,
+                    "description": t.get("description", ""),
+                    "category": category.get("title"), "tags": t.get("tags", []),
+                    "models": t.get("models", []), "size": t.get("size") or None,
+                    "date": t.get("date"), "usage": t.get("usage"),
+                    "open_source": t.get("openSource", True),
+                    "min_version": t.get("minComfyUIVersion"),
+                    "thumbnail": f"{TEMPLATES_RAW}{name}-1.{t.get('mediaSubtype', 'webp')}",
+                    "workflow": f"{TEMPLATES_RAW}{name}.json",
+                    "page": t.get("tutorialUrl") or
+                    f"https://github.com/Comfy-Org/workflow_templates/blob/main/templates/{name}.json",
+                })
+        entries = [e for e in entries if _matches(e, query)]
+    elif source == "hf":
+        for repo, path in _hf_listing(refresh)["workflows"]:
+            stem = path.rsplit("/", 1)[-1][:-5]
+            entries.append({
+                "id": f"{repo.split('/')[-1]}-{stem}", "source": source,
+                "title": stem.replace("_", " ").replace("-", " "),
+                "description": f"Example workflow from {repo}", "category": repo.split("/")[-1],
+                "tags": [], "models": [], "open_source": True,
+                "workflow": f"https://huggingface.co/{repo}/resolve/main/{urllib.parse.quote(path)}",
+                "page": f"https://huggingface.co/{repo}/blob/main/{urllib.parse.quote(path)}",
+            })
+        entries = [e for e in entries if _matches(e, query)]
+    elif source == "civitai":
+        params = {"types": "Workflows", "limit": limit, "nsfw": "false",
+                  "sort": "Most Downloaded"}
+        if query:
+            params["query"] = query
+        if cursor:
+            params["cursor"] = cursor
+        url = "https://civitai.com/api/v1/models?" + urllib.parse.urlencode(params)
+        with urllib.request.urlopen(_download_request(url), timeout=60) as resp:
+            data = json.load(resp)
+        for item in data.get("items", []):
+            versions = item.get("modelVersions") or []
+            if not versions or not versions[0].get("files"):
+                continue
+            version = versions[0]
+            files = version["files"]
+            file = next((f for f in files if f.get("primary")), files[0])
+            image = next((i["url"] for i in version.get("images", [])
+                          if (i.get("nsfwLevel") or 1) <= 1 and i.get("type", "image") == "image"), None)
+            description = html.unescape(re.sub(r"<[^>]+>", " ", item.get("description") or ""))
+            entries.append({
+                "id": f"civitai-{item['id']}", "source": source, "title": item.get("name", "?"),
+                "description": re.sub(r"\s+", " ", description).strip()[:600],
+                "category": (item.get("creator") or {}).get("username"),
+                "tags": item.get("tags", []), "models": [version.get("baseModel")] if version.get("baseModel") else [],
+                "date": (version.get("publishedAt") or "")[:10],
+                "usage": (item.get("stats") or {}).get("downloadCount"), "open_source": True,
+                "thumbnail": image.replace("/original=true/", "/width=320/") if image else None,
+                "workflow": file["downloadUrl"],
+                "page": f"https://civitai.com/models/{item['id']}",
+            })
+        next_cursor = (data.get("metadata") or {}).get("nextCursor")
+    else:
+        raise ComfyError(f"unknown source {source!r}; one of {', '.join(BROWSE_SOURCES)}")
+
+    # Flag templates newer than the server, when it's reachable.
+    try:
+        version = (server or Comfy(timeout=3)).system_stats()["system"].get("comfyui_version")
+    except (ComfyError, KeyError, OSError):
+        version = None
+    for e in entries:
+        e["too_new"] = bool(version and e.get("min_version")
+                            and _version_tuple(e["min_version"]) > _version_tuple(version))
+    return {"entries": entries, "next": next_cursor, "server_version": version}
+
+
+def fetch_thumbnails(entries: list[dict]) -> None:
+    """Download each entry's thumbnail into CACHE_DIR (once) and set
+    "thumbnail_path". Failures just leave it unset."""
+    thumbs = CACHE_DIR / "thumbnails"
+    thumbs.mkdir(parents=True, exist_ok=True)
+
+    def one(entry: dict) -> None:
+        url = entry.get("thumbnail")
+        if not url:
+            return
+        suffix = Path(urllib.parse.urlparse(url).path).suffix.lower()
+        if suffix not in (".webp", ".png", ".jpg", ".jpeg", ".gif"):
+            return  # audio templates "preview" as .mp3
+        dest = thumbs / (hashlib.sha1(url.encode()).hexdigest() + suffix)
+        if not dest.exists():
+            try:
+                with urllib.request.urlopen(_download_request(url), timeout=30) as resp:
+                    tmp = dest.with_suffix(".part")
+                    tmp.write_bytes(resp.read())
+                    tmp.rename(dest)
+            except (OSError, urllib.error.URLError):
+                return
+        entry["thumbnail_path"] = str(dest)
+
+    with concurrent.futures.ThreadPoolExecutor(16) as pool:
+        list(pool.map(one, entries))
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^\w.-]+", "-", name).strip("-.")[:80] or "workflow"
+
+
+def get_workflow(url: str, name: str | None = None,
+                 dest_dir: str | os.PathLike = WEBUI_WORKFLOW_DIR) -> list[Path]:
+    """Download a shared workflow (JSON, a PNG with one embedded, or a zip of
+    either, as Civitai serves them) into DEST_DIR, which defaults to the web
+    UI's workflow library. Returns the saved .json paths."""
+    dest_dir = Path(dest_dir).expanduser()
+    try:
+        with urllib.request.urlopen(_download_request(url), timeout=120) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        hint = " (needs login: put a Civitai API key in ~/.config/comfy/civitai-token, or an HF token in ~/.cache/huggingface/token)" if e.code in (401, 403) else ""
+        raise ComfyError(f"{url} -> HTTP {e.code}{hint}") from None
+    name = _slug(name or Path(urllib.parse.urlparse(url).path).stem)
+
+    def workflow_of(data: bytes) -> dict | None:
+        if data.startswith(b"\x89PNG"):
+            chunks = _png_text(data)
+            text = chunks.get("workflow") or chunks.get("prompt")
+            return json.loads(text) if text else None
+        try:
+            doc = json.loads(data)
+        except ValueError:
+            return None
+        return doc if isinstance(doc, dict) and (_is_ui_format(doc) or "prompt" in doc or
+                                                 all(isinstance(v, dict) and "class_type" in v
+                                                     for v in doc.values())) else None
+
+    found: list[tuple[str, dict]] = []
+    if raw.startswith(b"PK"):
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            for member in zf.namelist():
+                base = member.rsplit("/", 1)[-1]
+                if base.lower().endswith((".json", ".png")) and not base.startswith("."):
+                    doc = workflow_of(zf.read(member))
+                    if doc:
+                        found.append((_slug(base.rsplit(".", 1)[0]), doc))
+        target = dest_dir / name if len(found) > 1 else dest_dir
+    else:
+        doc = workflow_of(raw)
+        if doc:
+            found.append((name, doc))
+        target = dest_dir
+    if not found:
+        raise ComfyError(f"no ComfyUI workflow found in {url}")
+    target.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for stem, doc in found:
+        path = target / f"{stem if len(found) > 1 else name}.json"
+        path.write_text(json.dumps(doc, indent=2))
+        saved.append(path)
+    return saved
+
+
 # -- CLI --------------------------------------------------------------------
 
 def _parse_set(pairs: Iterable[str]) -> dict[str, Any]:
@@ -407,12 +1020,32 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-b", "--batch", type=int, default=1)
     add_run_opts(p)
 
+    p = sub.add_parser("fetch", help="download the models a workflow needs into the right models/ folders")
+    p.add_argument("workflow", help=f"name in {WORKFLOW_DIR}, path, URL, or a ComfyUI PNG")
+    p.add_argument("--dry-run", action="store_true", help="only show what's present/missing")
+    p.add_argument("--models-dir", default=str(MODELS_DIR), help="server models dir (default %(default)s)")
+    p.add_argument("--refresh-index", action="store_true", help="re-read the Hugging Face file index now")
+
+    p = sub.add_parser("browse", help="list shared workflows: official templates, HF examples, Civitai")
+    p.add_argument("source", nargs="?", default="templates", choices=BROWSE_SOURCES)
+    p.add_argument("-q", "--query", help="only entries matching all these words")
+    p.add_argument("--api", action="store_true", help="include templates that use paid API nodes")
+    p.add_argument("--refresh", action="store_true", help="re-download the index now")
+    p.add_argument("--cursor", help="next page (Civitai)")
+    p.add_argument("--thumbnails", action="store_true", help="download thumbnails to the cache")
+
+    p = sub.add_parser("get", help="download a shared workflow into the web UI's workflow library")
+    p.add_argument("url", help="workflow URL (a `browse` entry's workflow field), JSON, PNG or zip")
+    p.add_argument("--name", help="file name to save as")
+    p.add_argument("--dest", default=str(WEBUI_WORKFLOW_DIR), help="directory (default %(default)s)")
+
     p = sub.add_parser("run", help="run an API-format workflow file")
     p.add_argument("workflow", help=f"path, or a name in {WORKFLOW_DIR}")
     p.add_argument("-p", "--prompt", help="replace the positive prompt text")
     p.add_argument("-n", "--negative", help="replace the negative prompt text")
     p.add_argument("--set", action="append", default=[], metavar="NODE.INPUT=VALUE",
                    help="override any node input (VALUE parsed as JSON if possible)")
+    p.add_argument("--fetch", action="store_true", help="download missing models first (see `fetch`)")
     add_run_opts(p)
 
     args = ap.parse_args(argv)
@@ -458,6 +1091,35 @@ def main(argv: list[str] | None = None) -> int:
             name = c.upload_image(args.image); emit({"name": name}, name)
         elif args.cmd == "wait-up":
             c.wait_until_up(args.timeout); emit({"up": True}, "up")
+        elif args.cmd == "browse":
+            data = browse(args.source, args.query, include_api=args.api, refresh=args.refresh,
+                          cursor=args.cursor, server=c)
+            if args.thumbnails:
+                fetch_thumbnails(data["entries"])
+            emit(data, "\n".join(
+                f"{e['title']}  [{', '.join(e.get('tags') or [])}]\n    {e['workflow']}"
+                for e in data["entries"]) or "nothing found")
+        elif args.cmd == "get":
+            files = get_workflow(args.url, args.name, args.dest)
+            emit({"files": [str(f) for f in files]}, "\n".join(str(f) for f in files))
+        elif args.cmd == "fetch":
+            refs = fetch_models(args.workflow, args.models_dir, dry_run=args.dry_run,
+                                refresh_index=args.refresh_index, on_status=status)
+            missing = [r for r in refs if r.status == "missing"]
+            data = {"models": [asdict(r) for r in refs],
+                    "missing_bytes": sum(r.size or 0 for r in missing)}
+            lines = []
+            for r in refs:
+                where = f"{r.directory or '?'}/{r.name}"
+                extra = r.error or (r.source if r.status == "missing" else r.path) or ""
+                size = _human(r.size) if r.size else ""
+                lines.append(f"{r.status:<11} {where:<60} {size:>10}  {extra}")
+            if missing:
+                lines.append(f"{len(missing)} to download, {_human(data['missing_bytes'])}"
+                             + ("; run without --dry-run to fetch" if args.dry_run else ""))
+            emit(data, "\n".join(lines) or "no model files referenced")
+            if any(r.status in ("failed", "unresolved") for r in refs) and not args.dry_run:
+                return 1
         elif args.cmd in ("gen", "run"):
             if args.cmd == "gen":
                 files = c.txt2img(args.prompt, args.negative, checkpoint=args.checkpoint,
@@ -466,6 +1128,10 @@ def main(argv: list[str] | None = None) -> int:
                                   seed=args.seed, batch=args.batch, out_dir=args.out,
                                   timeout=args.timeout, on_status=status)
             else:
+                if args.fetch:
+                    for r in fetch_models(args.workflow, on_status=status):
+                        if r.status in ("failed", "unresolved"):
+                            status(f"{r.name}: {r.status}: {r.error}")
                 files = c.run(load_workflow(args.workflow), prompt=args.prompt,
                               negative=args.negative, seed=args.seed, set=_parse_set(args.set),
                               out_dir=args.out, timeout=args.timeout, on_status=status)
