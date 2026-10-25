@@ -11,6 +11,8 @@ Library use:
     comfy.fetch_models("some-workflow.json")  # download its missing models
     comfy.browse("templates", query="qwen")  # shared workflows: templates/hf/civitai
     comfy.get_workflow(url)                   # into the web UI's workflow library
+    comfy.discover_models(tag="landscape", types=["lora"])  # Civitai models
+    comfy.install_model(version_id)           # into models/<its folder>/
 
 CLI use: `comfy --help`. Emacs drives the CLI with `--json`.
 
@@ -968,6 +970,177 @@ def get_workflow(url: str, name: str | None = None,
     return saved
 
 
+# -- Discovering models (Civitai) ---------------------------------------------
+
+CIVITAI_API = "https://civitai.com/api/v1/"
+# Civitai model type -> folder under models/ it's installed into. Only these
+# types are browsable, since ComfyUI's core loaders read these folders.
+CIVITAI_TYPE_FOLDERS = {
+    "Checkpoint": "checkpoints", "LORA": "loras", "LoCon": "loras", "DoRA": "loras",
+    "TextualInversion": "embeddings", "Hypernetwork": "hypernetworks", "VAE": "vae",
+    "Controlnet": "controlnet", "Upscaler": "upscale_models",
+}
+# Friendlier names for --type.
+MODEL_TYPE_NAMES = {
+    "checkpoint": "Checkpoint", "lora": "LORA", "locon": "LoCon", "dora": "DoRA",
+    "embedding": "TextualInversion", "hypernetwork": "Hypernetwork", "vae": "VAE",
+    "controlnet": "Controlnet", "upscaler": "Upscaler",
+}
+SAVED_MODELS = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "comfy" / "saved-models.json"
+
+
+def _civitai_get(path: str, params: dict | None = None) -> Any:
+    url = CIVITAI_API + path + ("?" + urllib.parse.urlencode(params, doseq=True) if params else "")
+    try:
+        with urllib.request.urlopen(_download_request(url), timeout=60) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise ComfyError(f"Civitai {path} -> HTTP {e.code}") from None
+
+
+def _primary_file(version: dict) -> dict | None:
+    files = [f for f in version.get("files") or [] if f.get("type") in (None, "Model")] or \
+        version.get("files") or []
+    return next((f for f in files if f.get("primary")), files[0] if files else None)
+
+
+def _model_entry(model: dict, version: dict, models_dir: Path, saved: set[int]) -> dict | None:
+    """A browse entry (same shape as `browse' ones, kind "model") for one
+    Civitai model version, or None if ComfyUI can't load its type."""
+    folder = CIVITAI_TYPE_FOLDERS.get(model.get("type"))
+    file = _primary_file(version)
+    if not folder or not file:
+        return None
+    image = next((i["url"] for i in version.get("images") or []
+                  if (i.get("nsfwLevel") or 1) <= 1 and i.get("type", "image") == "image"), None)
+    description = html.unescape(re.sub(r"<[^>]+>", " ", model.get("description") or ""))
+    trained = [w.strip() for w in version.get("trainedWords") or [] if w.strip()]
+    type_label = {v: k for k, v in MODEL_TYPE_NAMES.items()}.get(model["type"], model["type"])
+    return {
+        "kind": "model", "id": f"civitai-model-{model['id']}", "source": "models",
+        "model_id": model["id"], "version_id": version["id"],
+        "title": f"{model.get('name', '?')} ({version.get('name', '')})",
+        "description": re.sub(r"\s+", " ", description).strip()[:500],
+        "category": type_label, "tags": model.get("tags") or [],
+        "models": [version["baseModel"]] if version.get("baseModel") else [],
+        "size": int((file.get("sizeKB") or 0) * 1024) or None,
+        "date": (version.get("publishedAt") or version.get("createdAt") or "")[:10],
+        "usage": (model.get("stats") or {}).get("downloadCount"), "open_source": True,
+        "trained_words": trained,
+        "thumbnail": image.replace("/original=true/", "/width=320/") if image else None,
+        "page": f"https://civitai.com/models/{model['id']}?modelVersionId={version['id']}",
+        "file": file["name"], "folder": folder,
+        "installed": (models_dir / folder / file["name"]).exists(),
+        "saved": version["id"] in saved,
+    }
+
+
+def _saved_models() -> list[dict]:
+    return json.loads(SAVED_MODELS.read_text()) if SAVED_MODELS.exists() else []
+
+
+def _write_saved_models(entries: list[dict]) -> None:
+    SAVED_MODELS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SAVED_MODELS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(entries, indent=2))
+    tmp.replace(SAVED_MODELS)
+
+
+def discover_models(query: str | None = None, tag: str | None = None,
+                    types: list[str] | None = None, base: str | None = None,
+                    sort: str = "Most Downloaded", period: str | None = None,
+                    cursor: str | None = None, limit: int = 40,
+                    models_dir: str | os.PathLike = MODELS_DIR) -> dict:
+    """Search Civitai for models ComfyUI can load (checkpoints, LoRAs, VAEs,
+    ...). TYPES are names from MODEL_TYPE_NAMES; BASE is a Civitai base model
+    like "SDXL 1.0" or "Flux.1 D". Returns {"entries": [...], "next": cursor}."""
+    wanted = [MODEL_TYPE_NAMES.get(t.lower(), t) for t in types] if types else \
+        list(CIVITAI_TYPE_FOLDERS)
+    params: dict[str, Any] = {"types": wanted, "sort": sort, "limit": limit, "nsfw": "false"}
+    for key, value in (("query", query), ("tag", tag), ("baseModels", base),
+                       ("period", period), ("cursor", cursor)):
+        if value:
+            params[key] = value
+    data = _civitai_get("models", params)
+    saved = {e["version_id"] for e in _saved_models()}
+    entries = []
+    for model in data.get("items", []):
+        versions = model.get("modelVersions") or []
+        if versions and (entry := _model_entry(model, versions[0], Path(models_dir), saved)):
+            entries.append(entry)
+    return {"entries": entries, "next": (data.get("metadata") or {}).get("nextCursor")}
+
+
+def model_tags(query: str | None = None, limit: int = 200) -> list[str]:
+    """Popular Civitai tags (matching QUERY), most used first."""
+    params: dict[str, Any] = {"limit": limit}
+    if query:
+        params["query"] = query
+    return [t["name"] for t in _civitai_get("tags", params).get("items", [])]
+
+
+def _version_entry(version_id: int, models_dir: str | os.PathLike = MODELS_DIR) -> dict:
+    version = _civitai_get(f"model-versions/{version_id}")
+    model = _civitai_get(f"models/{version['modelId']}")
+    entry = _model_entry(model, version, Path(models_dir),
+                         {e["version_id"] for e in _saved_models()})
+    if entry is None:
+        raise ComfyError(f"{model.get('name')} is a {model.get('type')}, which ComfyUI's core loaders don't use")
+    return entry
+
+
+def saved_models(models_dir: str | os.PathLike = MODELS_DIR) -> list[dict]:
+    """The saved list, newest first, with "installed" refreshed."""
+    entries = _saved_models()
+    for e in entries:
+        e["saved"] = True
+        e["installed"] = (Path(models_dir) / e["folder"] / e["file"]).exists()
+    return entries
+
+
+def save_model(version_id: int) -> dict:
+    """Add a Civitai model version to the saved list (no-op if present)."""
+    entries = _saved_models()
+    if not any(e["version_id"] == version_id for e in entries):
+        entry = _version_entry(version_id)
+        entry["saved"] = True
+        entries.insert(0, entry)
+        _write_saved_models(entries)
+    return {"saved": True, "version_id": version_id}
+
+
+def unsave_model(version_id: int) -> dict:
+    _write_saved_models([e for e in _saved_models() if e["version_id"] != version_id])
+    return {"saved": False, "version_id": version_id}
+
+
+def install_model(version_id: int, models_dir: str | os.PathLike = MODELS_DIR,
+                  on_status: Any = None) -> ModelRef:
+    """Download a Civitai model version into the models/ folder for its type,
+    checking Civitai's sha256. Skips it if the file is already there."""
+    models_dir = Path(models_dir).expanduser()
+    if not models_dir.is_dir():
+        raise ComfyError(f"models dir {models_dir} doesn't exist; set COMFY_MODELS_DIR or --models-dir")
+    version = _civitai_get(f"model-versions/{version_id}")
+    model_type = (version.get("model") or {}).get("type")
+    folder = CIVITAI_TYPE_FOLDERS.get(model_type)
+    file = _primary_file(version)
+    if not folder or not file:
+        raise ComfyError(f"can't install a {model_type} model (no folder for it, or no file)")
+    ref = ModelRef(name=file["name"], directory=folder, url=file["downloadUrl"],
+                   sha256=(file.get("hashes") or {}).get("SHA256"),
+                   size=int((file.get("sizeKB") or 0) * 1024) or None, source="civitai",
+                   path=str(models_dir / folder / file["name"]))
+    if Path(ref.path).exists():
+        ref.status = "present"
+        return ref
+    # Civitai's sizeKB is rounded, so don't use it to decide a .part is complete.
+    ref.size = None
+    download_model(ref, on_status)
+    ref.status = "downloaded"
+    return ref
+
+
 # -- CLI --------------------------------------------------------------------
 
 def _parse_set(pairs: Iterable[str]) -> dict[str, Any]:
@@ -1039,6 +1212,29 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", help="file name to save as")
     p.add_argument("--dest", default=str(WEBUI_WORKFLOW_DIR), help="directory (default %(default)s)")
 
+    p = sub.add_parser("discover", help="browse Civitai models ComfyUI can load")
+    p.add_argument("-q", "--query")
+    p.add_argument("-t", "--tag")
+    p.add_argument("--type", action="append", choices=sorted(MODEL_TYPE_NAMES),
+                   help="repeatable; default: all loadable types")
+    p.add_argument("-b", "--base", help='base model, e.g. "SDXL 1.0", "Flux.1 D", "Illustrious"')
+    p.add_argument("--sort", default="Most Downloaded",
+                   choices=["Most Downloaded", "Highest Rated", "Newest"])
+    p.add_argument("--period", choices=["AllTime", "Year", "Month", "Week", "Day"])
+    p.add_argument("--cursor", help="next page")
+    p.add_argument("--thumbnails", action="store_true", help="download thumbnails to the cache")
+    p = sub.add_parser("tags", help="popular Civitai tags")
+    p.add_argument("-q", "--query")
+    p = sub.add_parser("install", help="download a Civitai model version into the right models/ folder")
+    p.add_argument("version_id", type=int)
+    p.add_argument("--models-dir", default=str(MODELS_DIR))
+    p = sub.add_parser("saved", help="list saved models")
+    p.add_argument("--thumbnails", action="store_true")
+    p = sub.add_parser("save", help="save a Civitai model version for later")
+    p.add_argument("version_id", type=int)
+    p = sub.add_parser("unsave", help="remove a model version from the saved list")
+    p.add_argument("version_id", type=int)
+
     p = sub.add_parser("run", help="run an API-format workflow file")
     p.add_argument("workflow", help=f"path, or a name in {WORKFLOW_DIR}")
     p.add_argument("-p", "--prompt", help="replace the positive prompt text")
@@ -1099,6 +1295,29 @@ def main(argv: list[str] | None = None) -> int:
             emit(data, "\n".join(
                 f"{e['title']}  [{', '.join(e.get('tags') or [])}]\n    {e['workflow']}"
                 for e in data["entries"]) or "nothing found")
+        elif args.cmd in ("discover", "saved"):
+            if args.cmd == "discover":
+                data = discover_models(args.query, args.tag, args.type, args.base,
+                                       args.sort, args.period, args.cursor)
+            else:
+                data = {"entries": saved_models(), "next": None}
+            if args.thumbnails:
+                fetch_thumbnails(data["entries"])
+            emit(data, "\n".join(
+                f"{e['title']}  [{e['category']}, {', '.join(e['models'])}]"
+                f"{'  saved' if e['saved'] else ''}{'  installed' if e['installed'] else ''}"
+                f"\n    version {e['version_id']}  {e['page']}"
+                for e in data["entries"]) or "nothing found")
+        elif args.cmd == "tags":
+            tags = model_tags(args.query)
+            emit(tags, "\n".join(tags))
+        elif args.cmd == "install":
+            ref = install_model(args.version_id, args.models_dir, on_status=status)
+            emit(asdict(ref), f"{ref.status}: {ref.path}")
+        elif args.cmd == "save":
+            emit(save_model(args.version_id), "saved")
+        elif args.cmd == "unsave":
+            emit(unsave_model(args.version_id), "removed")
         elif args.cmd == "get":
             files = get_workflow(args.url, args.name, args.dest)
             emit({"files": [str(f) for f in files]}, "\n".join(str(f) for f in files))
